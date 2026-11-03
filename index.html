@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NavPilot - Real-Time Cargo Ship Path-Planning Simulator</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header Bar -->
+  <header class="app-header">
+    <div class="brand-wrapper">
+      <div class="brand-icon">🚢</div>
+      <div>
+        <h1 class="app-title">NavPilot: Cargo Ship Path-Planning Simulator</h1>
+        <p class="app-subtitle">Real-Time Bathymetric Maritime Navigation & Collision Avoidance (A*, Theta*, Monkey Search, Hybrid)</p>
+      </div>
+    </div>
+    <div class="header-status-group">
+      <div class="status-pill">
+        <span class="status-indicator"></span>
+        <span>Real-Time Engine Active</span>
+      </div>
+      <a href="https://github.com/AbhyasKathuria/NavPilot" target="_blank" rel="noopener noreferrer" class="repo-link">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+        GitHub: NavPilot
+      </a>
+    </div>
+  </header>
+
+  <!-- Main 3-Column Layout -->
+  <main class="main-layout">
+    <!-- Column 1: Controls & Ship Parameters -->
+    <section class="controls-column">
+      <!-- Simulation Execution Card -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Simulation Controls</span>
+          <span class="speed-badge" id="speedDisplay">1.0x</span>
+        </div>
+        <div class="panel-body">
+          <div class="sim-actions-grid">
+            <button id="btnRun" class="btn btn-primary">▶ Run</button>
+            <button id="btnPause" class="btn">⏸ Pause</button>
+            <button id="btnReset" class="btn">🔄 Reset</button>
+          </div>
+
+          <div class="form-group">
+            <label for="speedSlider">Simulation Speed</label>
+            <div class="slider-container">
+              <input type="range" id="speedSlider" min="0.2" max="5.0" step="0.2" value="1.0">
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 10px;">
+            <button id="btnBenchmark" class="btn btn-block" style="background-color: var(--color-rose); border-color: var(--border-strong);">
+              ⚡ Benchmark All 4 Algorithms
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Algorithm Selection Card -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Routing Algorithm</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label for="algSelect">Select Algorithm</label>
+            <select id="algSelect" class="form-control">
+              <option value="hybrid" selected>Hybrid: Theta* + Monkey + Dubins (Recommended)</option>
+              <option value="thetastar">Theta* (Any-Angle Line of Sight)</option>
+              <option value="monkey">Monkey Search (Metaheuristic Optimization)</option>
+              <option value="astar">A* (8-Connected Grid Baseline)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="mapPresetSelect">Maritime Scenario Preset</label>
+            <select id="mapPresetSelect" class="form-control">
+              <option value="archipelago" selected>Archipelago (Islands & Reefs)</option>
+              <option value="singapore">Singapore Strait (Busy Fairway)</option>
+              <option value="ice_alley">Iceberg Alley (Hazard Corridors)</option>
+              <option value="canal">Canal Approach (Narrow Dredged Pass)</option>
+              <option value="random">Random Procedural Map</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interactive Map Tools Card -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Interactive Map Tools</span>
+        </div>
+        <div class="panel-body">
+          <div class="tool-grid">
+            <button id="toolSetStart" class="btn">🚩 Set Start</button>
+            <button id="toolSetDest" class="btn">🎯 Set Dest</button>
+            <button id="toolAddLand" class="btn active">⛰ Add Land</button>
+            <button id="toolRemoveLand" class="btn">🌊 Clear Land</button>
+            <button id="toolAddShallow" class="btn">🏖 Add Shoal</button>
+            <button id="toolAddDynamic" class="btn">🚢 Add Dynamic</button>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px;">
+            <button id="btnRandomMap" class="btn">🎲 Random Map</button>
+            <button id="btnClearObstacles" class="btn">🗑 Clear All</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ship Physical Parameters Card -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Ship Physical Parameters</span>
+        </div>
+        <div class="panel-body">
+          <div class="param-grid">
+            <div class="param-item">
+              <label for="paramLength">Length (m)</label>
+              <input type="number" id="paramLength" value="200" min="50" max="450" step="10">
+            </div>
+            <div class="param-item">
+              <label for="paramBeam">Beam / Width (m)</label>
+              <input type="number" id="paramBeam" value="32" min="10" max="70" step="2">
+            </div>
+            <div class="param-item">
+              <label for="paramDraft">Draft (m)</label>
+              <input type="number" id="paramDraft" value="12" min="4" max="25" step="0.5">
+            </div>
+            <div class="param-item">
+              <label for="paramDisplacement">Displacement (t)</label>
+              <input type="number" id="paramDisplacement" value="50000" min="5000" max="250000" step="5000">
+            </div>
+            <div class="param-item">
+              <label for="paramSpeed">Max Speed (kn)</label>
+              <input type="number" id="paramSpeed" value="18" min="6" max="30" step="1">
+            </div>
+            <div class="param-item">
+              <label for="paramTurnRadius">Min Turn Rad (m)</label>
+              <input type="number" id="paramTurnRadius" value="400" min="150" max="1000" step="25">
+            </div>
+          </div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 8px;">
+            * Scale: 1 cell = 50 m. Full grid = 2500 m × 2500 m (1.35 NM).
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Column 2: 500x500 Canvas Stage -->
+    <section class="canvas-column">
+      <div class="canvas-wrapper">
+        <div class="canvas-header-bar">
+          <span>500×500 px Sea Map (50×50 Cells)</span>
+          <span style="font-size: 10px; color: var(--text-secondary);">Real-Time 60 FPS</span>
+        </div>
+
+        <canvas id="mapCanvas" width="500" height="500"></canvas>
+
+        <div class="canvas-footer-bar">
+          <span>Click / drag to edit map using the selected tool</span>
+          <span id="canvasCoordsDisplay">Hover over cell to inspect</span>
+        </div>
+      </div>
+
+      <!-- Live Telemetry Card -->
+      <div class="panel-card" style="margin-top: 14px;">
+        <div class="panel-header">
+          <span>Live Navigation Telemetry</span>
+          <span style="font-size: 10px; color: var(--text-secondary);">Real-Time Sensor Bus</span>
+        </div>
+        <div class="panel-body">
+          <div class="stats-grid">
+            <div class="stat-box">
+              <div class="stat-label">Algorithm</div>
+              <div class="stat-value" id="statAlg">HYBRID</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Nodes Expanded</div>
+              <div class="stat-value" id="statNodes">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Planned Path Length</div>
+              <div class="stat-value" id="statLength">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Path Smoothness (Turn)</div>
+              <div class="stat-value" id="statSmoothness">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Compute Time</div>
+              <div class="stat-value" id="statTime">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Replanning Count</div>
+              <div class="stat-value" id="statReplans">0</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Clearance Margin</div>
+              <div class="stat-value" id="statClearance">—</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Stopping Distance</div>
+              <div class="stat-value" id="statStopping">175 m</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">Ship Speed</div>
+              <div class="stat-value" id="statSpeed">0.0 kn</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-label">ETA to Destination</div>
+              <div class="stat-value" id="statETA">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Column 3: Comparison Table & Event Log -->
+    <section class="info-column">
+      <!-- Algorithm Comparison Table -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Algorithm Comparison Table</span>
+        </div>
+        <div class="panel-body" style="padding: 6px;">
+          <div class="table-responsive">
+            <table class="comparison-table">
+              <thead>
+                <tr>
+                  <th>Algorithm</th>
+                  <th>Time</th>
+                  <th>Nodes</th>
+                  <th>Length</th>
+                  <th>Turn</th>
+                  <th>Clearance</th>
+                  <th>Violations</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="comparisonTbody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real-Time Event Log Terminal -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Real-Time Navigation & Collision Log</span>
+          <button id="btnClearLog" class="btn" style="padding: 2px 8px; font-size: 10px;">Clear</button>
+        </div>
+        <div class="panel-body">
+          <div class="log-container">
+            <ul id="eventLogList" class="event-log-list">
+              <!-- Log messages populated in real-time -->
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- Map & Physics Legend -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Maritime Physics & Legend</span>
+        </div>
+        <div class="panel-body">
+          <div class="doc-box">
+            <h4>Color Palette & Symbol Representation</h4>
+            <div class="legend-row">
+              <div class="legend-item">
+                <span class="legend-color" style="background-color: #FFF4DE;"></span>
+                <span>Deep Sea (&gt;20m)</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color" style="background-color: #FFE8C4;"></span>
+                <span>Shoal Reef (8m)</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color" style="background-color: #7C5865;"></span>
+                <span>Land / Rock</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color" style="background-color: #E05A6D;"></span>
+                <span>Dynamic Hazard</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color" style="background-color: #FFDDDD;"></span>
+                <span>Safety Buffer</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color" style="background-color: #D9536F;"></span>
+                <span>Path A (Initial)</span>
+              </div>
+              <div class="legend-item">
+                <span class="legend-color" style="background-color: #2A9D8F;"></span>
+                <span>Path B (Avoidance)</span>
+              </div>
+            </div>
+            <div style="margin-top: 10px; font-size: 10px; line-height: 1.4;">
+              <strong>Ship-Aware Planning:</strong> Obstacles are inflated by <code>beam/2 + safety buffer</code>. Curvature clamped to <code>&kappa; &le; 1/R<sub>min</sub></code>. Heavier displacement scales stopping distance and reduces turning acceleration.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Modular Scripts (No External Dependencies) -->
+  <script src="js/grid.js"></script>
+  <script src="js/ship.js"></script>
+  <script src="js/astar.js"></script>
+  <script src="js/thetastar.js"></script>
+  <script src="js/monkeysearch.js"></script>
+  <script src="js/curvature.js"></script>
+  <script src="js/dynamic.js"></script>
+  <script src="js/renderer.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
