@@ -87,8 +87,9 @@ window.addEventListener('DOMContentLoaded', () => {
   const monkeySearchPlanner = new MonkeySearchPlanner(grid);
   const hybridPlanner = new HybridPlanner(grid);
 
-  // Initial Log
+  // Logging Helper
   function logEvent(message, type = 'info') {
+    if (!eventLogList) return;
     const li = document.createElement('li');
     const now = new Date();
     const timeStr = now.toTimeString().split(' ')[0];
@@ -102,24 +103,19 @@ window.addEventListener('DOMContentLoaded', () => {
   logEvent('Default Cargo Ship: 200m x 32m, 50,000t, min turn radius 400m, draft 12m.', 'info');
 
   // Spawn initial dynamic obstacles
-  spawnInitialDynamicObstacles();
-
   function spawnInitialDynamicObstacles() {
     obstacleManager.clear();
-    // 1 container vessel crossing shipping channel
     obstacleManager.addObstacle(18, 12, 0.45, 0.7, 'vessel', 38);
-    // 1 patrol craft
     obstacleManager.addObstacle(36, 32, -0.6, -0.4, 'vessel', 30);
-    // 1 drifting iceberg
     obstacleManager.addObstacle(28, 14, 0.15, 0.2, 'iceberg', 32);
-    // 1 lost container
     obstacleManager.addObstacle(12, 38, 0.1, -0.15, 'debris', 20);
     logEvent('4 dynamic hazards spawned (2 vessels, 1 iceberg, 1 container).', 'info');
   }
+  spawnInitialDynamicObstacles();
 
   // Active Planner Helper
   function getActivePlanner() {
-    const alg = algSelect.value;
+    const alg = algSelect ? algSelect.value : 'hybrid';
     return {
       name: alg,
       plan: (start, dest, vessel) => {
@@ -136,7 +132,6 @@ window.addEventListener('DOMContentLoaded', () => {
           if (!thetaSeed.success) return thetaSeed;
           return monkeySearchPlanner.optimize(thetaSeed.waypoints, draft, clearance, minRadius, 25);
         } else {
-          // hybrid (recommended)
           return hybridPlanner.plan(start, dest, vessel);
         }
       }
@@ -152,27 +147,28 @@ window.addEventListener('DOMContentLoaded', () => {
 
     if (!result.success || !result.path || result.path.length === 0) {
       logEvent(`Path planning failed: ${result.message || 'No navigable corridor'}`, 'error');
-      alert(`Path Planning Failed: ${result.message || 'No feasible path exists without collision'}`);
+      if (autoStartSimulation) {
+        alert(`Path Planning Failed: ${result.message || 'No feasible path exists without collision'}`);
+      }
       return;
     }
 
     logEvent(`Path computed successfully: ${result.lengthMeters.toFixed(0)}m length, ${result.smoothnessDeg.toFixed(1)}° total turn, ${result.computeTimeMs.toFixed(1)}ms.`, 'success');
 
     // Update Live Stats
-    statAlg.textContent = planner.name.toUpperCase();
-    statNodes.textContent = result.nodesExpanded !== undefined ? result.nodesExpanded : 'N/A';
-    statLength.textContent = `${result.lengthMeters.toFixed(0)} m (${(result.lengthMeters / 1852).toFixed(2)} NM)`;
-    statSmoothness.textContent = `${result.smoothnessDeg.toFixed(1)}°`;
-    statTime.textContent = `${result.computeTimeMs.toFixed(1)} ms`;
-    statClearance.textContent = `${result.minClearanceMeters.toFixed(1)} m`;
-    statReplans.textContent = '0';
+    if (statAlg) statAlg.textContent = planner.name.toUpperCase();
+    if (statNodes) statNodes.textContent = result.nodesExpanded !== undefined ? result.nodesExpanded : 'N/A';
+    if (statLength) statLength.textContent = `${result.lengthMeters.toFixed(0)} m (${(result.lengthMeters / 1852).toFixed(2)} NM)`;
+    if (statSmoothness) statSmoothness.textContent = `${result.smoothnessDeg.toFixed(1)}°`;
+    if (statTime) statTime.textContent = `${result.computeTimeMs.toFixed(1)} ms`;
+    if (statClearance) statClearance.textContent = `${result.minClearanceMeters.toFixed(1)} m`;
+    if (statReplans) statReplans.textContent = '0';
 
-    // Animate exploration wavefront, then start ship motion
-    if (result.explored && result.explored.length > 0) {
+    if (autoStartSimulation && result.explored && result.explored.length > 0) {
       renderer.startExplorationAnimation(result.explored, () => {
         ship.setPath(result.path, false);
-        if (autoStartSimulation) {
-          isSimRunning = true;
+        isSimRunning = true;
+        if (btnRun) {
           btnRun.textContent = 'Running...';
           btnRun.classList.add('active');
         }
@@ -181,17 +177,19 @@ window.addEventListener('DOMContentLoaded', () => {
       ship.setPath(result.path, false);
       if (autoStartSimulation) {
         isSimRunning = true;
-        btnRun.textContent = 'Running...';
-        btnRun.classList.add('active');
+        if (btnRun) {
+          btnRun.textContent = 'Running...';
+          btnRun.classList.add('active');
+        }
       }
     }
 
-    // Refresh benchmark comparison for user insight
     updateSingleBenchmarkRow(planner.name, result);
   }
 
   // Benchmark all 4 algorithms on current map
   function runFullBenchmark() {
+    if (!comparisonTbody) return;
     logEvent('Starting 4-Algorithm Benchmark comparison...', 'info');
     comparisonTbody.innerHTML = '';
 
@@ -222,7 +220,6 @@ window.addEventListener('DOMContentLoaded', () => {
       results.push({ name: a.name, id: a.id, result: res });
     }
 
-    // Render table rows
     results.forEach(item => {
       const r = item.result;
       const tr = document.createElement('tr');
@@ -246,8 +243,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateSingleBenchmarkRow(algId, res) {
-    // If table is empty, run full benchmark
-    if (comparisonTbody.children.length === 0) {
+    if (comparisonTbody && comparisonTbody.children.length === 0) {
       runFullBenchmark();
     }
   }
@@ -268,9 +264,11 @@ window.addEventListener('DOMContentLoaded', () => {
     if (activeTool === 'set_start') {
       grid.setStart(gx, gy);
       ship.resetToStart(grid.start);
+      computeAndApplyRoute(false);
       logEvent(`Start point moved to (${gx}, ${gy}).`, 'info');
     } else if (activeTool === 'set_dest') {
       grid.setDestination(gx, gy);
+      computeAndApplyRoute(false);
       logEvent(`Destination moved to (${gx}, ${gy}).`, 'info');
     } else if (activeTool === 'paint_obstacle') {
       if (!grid.isStart(gx, gy) && !grid.isDestination(gx, gy)) {
@@ -293,34 +291,36 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // Canvas Mouse Listeners
-  canvas.addEventListener('mousedown', (e) => {
-    isMouseDown = true;
-    applyToolAtPixel(e.clientX, e.clientY);
-  });
-
-  window.addEventListener('mouseup', () => {
-    isMouseDown = false;
-  });
-
-  canvas.addEventListener('mousemove', (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = 500 / rect.width;
-    const scaleY = 500 / rect.height;
-    const px = (clientX = e.clientX - rect.left) * scaleX;
-    const py = (clientY = e.clientY - rect.top) * scaleY;
-    const gx = Math.floor(px / renderer.cellSize);
-    const gy = Math.floor(py / renderer.cellSize);
-
-    renderer.setHoverCoord(gx, gy);
-
-    if (isMouseDown && (activeTool === 'paint_obstacle' || activeTool === 'paint_clear' || activeTool === 'paint_shallow')) {
+  if (canvas) {
+    canvas.addEventListener('mousedown', (e) => {
+      isMouseDown = true;
       applyToolAtPixel(e.clientX, e.clientY);
-    }
-  });
+    });
 
-  canvas.addEventListener('mouseleave', () => {
-    renderer.setHoverCoord(-1, -1);
-  });
+    window.addEventListener('mouseup', () => {
+      isMouseDown = false;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = 500 / rect.width;
+      const scaleY = 500 / rect.height;
+      const px = (e.clientX - rect.left) * scaleX;
+      const py = (e.clientY - rect.top) * scaleY;
+      const gx = Math.floor(px / renderer.cellSize);
+      const gy = Math.floor(py / renderer.cellSize);
+
+      renderer.setHoverCoord(gx, gy);
+
+      if (isMouseDown && (activeTool === 'paint_obstacle' || activeTool === 'paint_clear' || activeTool === 'paint_shallow')) {
+        applyToolAtPixel(e.clientX, e.clientY);
+      }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      renderer.setHoverCoord(-1, -1);
+    });
+  }
 
   // Tool Selection Buttons
   Object.keys(toolButtons).forEach(tool => {
@@ -336,6 +336,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Ship Parameter Changes
   function readShipInputs() {
+    if (!shipInputs.length) return;
     ship.updateParameters({
       length: shipInputs.length.value,
       beam: shipInputs.beam.value,
@@ -345,10 +346,13 @@ window.addEventListener('DOMContentLoaded', () => {
       minTurningRadius: shipInputs.minTurningRadius.value
     });
     grid.computeDistanceField(ship.draft);
-    statStopping.textContent = `${ship.computeStoppingDistanceMeters().toFixed(0)} m`;
+    if (statStopping) {
+      statStopping.textContent = `${ship.computeStoppingDistanceMeters().toFixed(0)} m`;
+    }
   }
 
   Object.values(shipInputs).forEach(input => {
+    if (!input) return;
     input.addEventListener('change', () => {
       readShipInputs();
       logEvent(`Ship parameter updated: ${input.id.replace('param', '')} = ${input.value}`, 'info');
@@ -356,82 +360,113 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   // Speed Slider
-  speedSlider.addEventListener('input', () => {
-    simulationSpeed = parseFloat(speedSlider.value);
-    speedDisplay.textContent = `${simulationSpeed.toFixed(1)}x`;
-  });
+  if (speedSlider) {
+    speedSlider.addEventListener('input', () => {
+      simulationSpeed = parseFloat(speedSlider.value);
+      if (speedDisplay) speedDisplay.textContent = `${simulationSpeed.toFixed(1)}x`;
+    });
+  }
 
   // Control Buttons
-  btnRun.addEventListener('click', () => {
-    if (!ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED') {
-      computeAndApplyRoute(true);
-    } else {
-      isSimRunning = true;
-      btnRun.textContent = 'Running...';
-      btnRun.classList.add('active');
-      logEvent('Simulation resumed.', 'info');
-    }
-  });
+  if (btnRun) {
+    btnRun.addEventListener('click', () => {
+      if (!ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED') {
+        computeAndApplyRoute(true);
+      } else {
+        isSimRunning = true;
+        btnRun.textContent = 'Running...';
+        btnRun.classList.add('active');
+        logEvent('Simulation resumed.', 'info');
+      }
+    });
+  }
 
-  btnPause.addEventListener('click', () => {
-    isSimRunning = false;
-    btnRun.textContent = 'Run';
-    btnRun.classList.remove('active');
-    logEvent('Simulation paused.', 'info');
-  });
+  if (btnPause) {
+    btnPause.addEventListener('click', () => {
+      isSimRunning = false;
+      if (btnRun) {
+        btnRun.textContent = 'Run';
+        btnRun.classList.remove('active');
+      }
+      logEvent('Simulation paused.', 'info');
+    });
+  }
 
-  btnReset.addEventListener('click', () => {
-    isSimRunning = false;
-    btnRun.textContent = 'Run';
-    btnRun.classList.remove('active');
-    ship.resetToStart(grid.start);
-    spawnInitialDynamicObstacles();
-    statReplans.textContent = '0';
-    logEvent('Simulation reset to start.', 'info');
-  });
+  if (btnReset) {
+    btnReset.addEventListener('click', () => {
+      isSimRunning = false;
+      if (btnRun) {
+        btnRun.textContent = 'Run';
+        btnRun.classList.remove('active');
+      }
+      ship.resetToStart(grid.start);
+      spawnInitialDynamicObstacles();
+      computeAndApplyRoute(false);
+      if (statReplans) statReplans.textContent = '0';
+      logEvent('Simulation reset to start.', 'info');
+    });
+  }
 
-  btnBenchmark.addEventListener('click', () => {
-    runFullBenchmark();
-  });
+  if (btnBenchmark) {
+    btnBenchmark.addEventListener('click', () => {
+      runFullBenchmark();
+    });
+  }
 
-  btnRandomMap.addEventListener('click', () => {
-    grid.generateRandomMap();
-    ship.resetToStart(grid.start);
-    logEvent('Generated random archipelago map.', 'info');
-    computeAndApplyRoute(false);
-  });
+  if (btnRandomMap) {
+    btnRandomMap.addEventListener('click', () => {
+      grid.generateRandomMap();
+      ship.resetToStart(grid.start);
+      logEvent('Generated random archipelago map.', 'info');
+      computeAndApplyRoute(false);
+    });
+  }
 
-  btnClearObstacles.addEventListener('click', () => {
-    grid.init();
-    grid.computeDistanceField(ship.draft);
-    ship.resetToStart(grid.start);
-    logEvent('Cleared all static obstacles.', 'info');
-  });
+  if (btnClearObstacles) {
+    btnClearObstacles.addEventListener('click', () => {
+      grid.init();
+      grid.computeDistanceField(ship.draft);
+      ship.resetToStart(grid.start);
+      logEvent('Cleared all static obstacles.', 'info');
+      computeAndApplyRoute(false);
+    });
+  }
 
-  btnAddDynamic.addEventListener('click', () => {
-    obstacleManager.addRandomObstacle();
-    logEvent('Spawned random dynamic maritime hazard.', 'info');
-  });
+  if (btnAddDynamic) {
+    btnAddDynamic.addEventListener('click', () => {
+      obstacleManager.addRandomObstacle();
+      logEvent('Spawned random dynamic maritime hazard.', 'info');
+    });
+  }
 
-  mapPresetSelect.addEventListener('change', () => {
-    const val = mapPresetSelect.value;
-    grid.loadPreset(val);
-    ship.resetToStart(grid.start);
-    logEvent(`Loaded scenario preset: ${val.toUpperCase()}`, 'info');
-    computeAndApplyRoute(false);
-  });
+  if (mapPresetSelect) {
+    mapPresetSelect.addEventListener('change', () => {
+      const val = mapPresetSelect.value;
+      grid.loadPreset(val);
+      ship.resetToStart(grid.start);
+      logEvent(`Loaded scenario preset: ${val.toUpperCase()}`, 'info');
+      computeAndApplyRoute(false);
+    });
+  }
 
-  btnClearLog.addEventListener('click', () => {
-    eventLogList.innerHTML = '';
-    logEvent('Event log cleared.', 'info');
-  });
+  if (algSelect) {
+    algSelect.addEventListener('change', () => {
+      logEvent(`Algorithm switched to: ${algSelect.options[algSelect.selectedIndex].text}`, 'info');
+      computeAndApplyRoute(false);
+    });
+  }
+
+  if (btnClearLog) {
+    btnClearLog.addEventListener('click', () => {
+      if (eventLogList) eventLogList.innerHTML = '';
+      logEvent('Event log cleared.', 'info');
+    });
+  }
 
   // Initial Route Run on startup
   readShipInputs();
-  setTimeout(() => {
-    computeAndApplyRoute(false);
-    runFullBenchmark();
-  }, 100);
+  computeAndApplyRoute(false);
+  runFullBenchmark();
 
   // Main Real-Time Animation Loop (requestAnimationFrame)
   function mainLoop(timestamp) {
@@ -451,8 +486,8 @@ window.addEventListener('DOMContentLoaded', () => {
       ship.update(dt, grid.cellSizeMeters);
 
       // 4. Update Live Telemetry
-      statSpeed.textContent = `${(ship.speed / 0.514444).toFixed(1)} kn`;
-      statReplans.textContent = `${ship.totalReplans}`;
+      if (statSpeed) statSpeed.textContent = `${(ship.speed / 0.514444).toFixed(1)} kn`;
+      if (statReplans) statReplans.textContent = `${ship.totalReplans}`;
 
       if (ship.speed > 0.1 && ship.activePath && ship.pathIndex < ship.activePath.length) {
         let remainingCells = 0;
@@ -466,17 +501,19 @@ window.addEventListener('DOMContentLoaded', () => {
         const etaSeconds = remainingMeters / ship.speed;
         const mins = Math.floor(etaSeconds / 60);
         const secs = Math.floor(etaSeconds % 60);
-        statETA.textContent = `${mins}m ${secs}s`;
+        if (statETA) statETA.textContent = `${mins}m ${secs}s`;
       } else if (ship.state === 'ARRIVED') {
-        statETA.textContent = 'ARRIVED';
+        if (statETA) statETA.textContent = 'ARRIVED';
       } else {
-        statETA.textContent = '—';
+        if (statETA) statETA.textContent = '—';
       }
 
       if (ship.state === 'ARRIVED') {
         isSimRunning = false;
-        btnRun.textContent = 'Run';
-        btnRun.classList.remove('active');
+        if (btnRun) {
+          btnRun.textContent = 'Run';
+          btnRun.classList.remove('active');
+        }
         logEvent('Destination reached successfully!', 'success');
       }
     }
@@ -487,5 +524,6 @@ window.addEventListener('DOMContentLoaded', () => {
     requestAnimationFrame(mainLoop);
   }
 
+  // Launch real-time 60fps loop
   requestAnimationFrame(mainLoop);
 });

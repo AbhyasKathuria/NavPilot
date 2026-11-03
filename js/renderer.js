@@ -61,6 +61,8 @@ class MaritimeRenderer {
 
   render(deltaTime = 0.016) {
     const ctx = this.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, 500, 500);
 
     // 1. Draw Bathymetric Grid & Static Obstacles
