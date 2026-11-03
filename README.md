@@ -31,8 +31,9 @@ High-contrast espresso dark mahogany (`#2C1810`) is utilized for typography and 
    cd NavPilot
    ```
 2. **Run Immediately**:
-   - Double-click **`index.html`** in any web browser (Chrome, Edge, Firefox, Safari).
-   - Alternatively, extract **`NavPilot.zip`** and open `index.html`.
+   - Double-click **`start.bat`** to run in 1-go!
+   - Alternatively, double-click **`index.html`** in any web browser (Chrome, Edge, Firefox, Safari).
+   - Or extract **`NavPilot.zip`** and run `start.bat`.
    - **No local server, node modules, build tools, or internet connection required.**
 
 ---
@@ -120,6 +121,7 @@ Unlike conventional point-particle pathfinders, NavPilot treats the cargo vessel
 
 ```
 NavPilot/
+├── start.bat           # 1-click launcher for Windows
 ├── index.html          # Main HTML5 single-page application interface
 ├── style.css           # Strict 4-color palette CSS stylesheet & bridge theme
 ├── README.md           # Technical documentation and operational guide
