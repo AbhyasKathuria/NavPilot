@@ -115,27 +115,27 @@ class MaritimeRenderer {
 
         if (type === this.grid.TYPE_LAND) {
           // Land / Island obstacle
-          ctx.fillStyle = '#7C5865';
+          ctx.fillStyle = '#334155'; // Dark bedrock / slate
           ctx.fillRect(px, py, this.cellSize, this.cellSize);
-          ctx.fillStyle = '#FFCED8';
+          ctx.fillStyle = '#87C4FF'; // Coastal highlight crest
           ctx.fillRect(px + 1, py + 1, this.cellSize - 2, 2);
         } else if (type === this.grid.TYPE_SHALLOW || depth < this.ship.draft) {
           // Shallow reef/shoal impassable for vessel draft D
-          ctx.fillStyle = '#FFE8C4';
+          ctx.fillStyle = '#FFEED9'; // Warm Sand / Shallow Reef
           ctx.fillRect(px, py, this.cellSize, this.cellSize);
-          ctx.fillStyle = '#E2B888';
+          ctx.fillStyle = '#E5D3BD';
           ctx.fillRect(px + 3, py + 3, 2, 2);
           ctx.fillRect(px + 7, py + 6, 2, 2);
         } else {
           // Deep Navigable Sea
-          ctx.fillStyle = '#FFF4DE';
+          ctx.fillStyle = '#E0F4FF'; // Crisp Soft Azure Deep Sea
           ctx.fillRect(px, py, this.cellSize, this.cellSize);
         }
       }
     }
 
     // Nautical grid coordinate lines
-    ctx.strokeStyle = 'rgba(215, 185, 175, 0.28)';
+    ctx.strokeStyle = 'rgba(135, 196, 255, 0.25)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     for (let i = 0; i <= 50; i += 5) {
@@ -158,7 +158,7 @@ class MaritimeRenderer {
 
     ctx.save();
     ctx.setLineDash([4, 4]);
-    ctx.strokeStyle = 'rgba(120, 90, 80, 0.35)';
+    ctx.strokeStyle = 'rgba(10, 37, 64, 0.35)';
     ctx.lineWidth = 1.0;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
@@ -172,9 +172,9 @@ class MaritimeRenderer {
     const distInfo = this.grid.getStraightLineDistance();
 
     ctx.save();
-    ctx.fillStyle = 'rgba(255, 244, 222, 0.92)';
-    ctx.strokeStyle = '#FFCED8';
-    ctx.lineWidth = 1;
+    ctx.fillStyle = '#FFEED9';
+    ctx.strokeStyle = '#39A7FF';
+    ctx.lineWidth = 1.2;
     const labelText = `Range: ${distInfo.nauticalMiles.toFixed(2)} NM (${distInfo.km.toFixed(2)} km)`;
     ctx.font = '10px "Inter", sans-serif';
     const textWidth = ctx.measureText(labelText).width;
@@ -182,7 +182,7 @@ class MaritimeRenderer {
     ctx.fillRect(midX - textWidth / 2 - 4, midY - 8, textWidth + 8, 16);
     ctx.strokeRect(midX - textWidth / 2 - 4, midY - 8, textWidth + 8, 16);
 
-    ctx.fillStyle = '#2A1A1E';
+    ctx.fillStyle = '#0A2540';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(labelText, midX, midY);
@@ -204,7 +204,7 @@ class MaritimeRenderer {
     }
 
     const count = this.isAnimatingExploration ? this.animatedExploredIndex : this.exploredAnimationQueue.length;
-    ctx.fillStyle = 'rgba(217, 83, 111, 0.32)';
+    ctx.fillStyle = 'rgba(57, 167, 255, 0.35)';
 
     for (let i = 0; i < count; i++) {
       const node = this.exploredAnimationQueue[i];
@@ -274,19 +274,19 @@ class MaritimeRenderer {
     }
 
     // -------------------------------------------------------------
-    // STAGE 3: Somersault Monkey Search Final Route (vivid coral/rose)
+    // STAGE 3: Somersault Monkey Search Final Route (Vivid Ocean Blue)
     // -------------------------------------------------------------
     const finalRoute = this.ship.stage3Path || this.ship.originalPath;
     if (this.showStage3 && finalRoute && finalRoute.length > 1) {
       ctx.save();
       if (this.ship.hasReplanned) {
         ctx.setLineDash([5, 5]);
-        ctx.strokeStyle = 'rgba(140, 110, 115, 0.6)';
+        ctx.strokeStyle = 'rgba(72, 101, 129, 0.6)';
         ctx.lineWidth = 2.0;
       } else {
-        ctx.strokeStyle = '#D9536F'; // Vivid Rose Accent
+        ctx.strokeStyle = '#39A7FF'; // Vivid Ocean Blue Accent
         ctx.lineWidth = 3.2;
-        ctx.shadowColor = 'rgba(217, 83, 111, 0.45)';
+        ctx.shadowColor = 'rgba(57, 167, 255, 0.55)';
         ctx.shadowBlur = 8;
       }
 
@@ -342,7 +342,7 @@ class MaritimeRenderer {
     // Wake trail
     if (ship.trail && ship.trail.length > 1) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
       ctx.lineWidth = 2.0;
       ctx.beginPath();
       for (let i = 0; i < ship.trail.length; i++) {
@@ -369,8 +369,8 @@ class MaritimeRenderer {
     // -------------------------------------------------------------
     if (this.showShipDomain) {
       ctx.save();
-      ctx.fillStyle = 'rgba(255, 221, 221, 0.32)'; // #FFDDDD domain zone
-      ctx.strokeStyle = '#FFCED8';                 // #FFCED8 domain boundary
+      ctx.fillStyle = 'rgba(135, 196, 255, 0.35)'; // #87C4FF domain zone
+      ctx.strokeStyle = '#39A7FF';                 // #39A7FF domain boundary
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
 
@@ -385,7 +385,7 @@ class MaritimeRenderer {
       ctx.stroke();
 
       // Ship Domain Tag
-      ctx.fillStyle = '#5C3D46';
+      ctx.fillStyle = '#0A2540';
       ctx.font = 'bold 8px "Inter", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(`SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³`, 0, -halfBmPx - domainRadiusPx - 3);
@@ -395,8 +395,8 @@ class MaritimeRenderer {
     // -------------------------------------------------------------
     // SHIP HULL (Length L, Beam B, Pointed Bow, Bridge, Containers)
     // -------------------------------------------------------------
-    ctx.fillStyle = '#2C1810'; // Deep dark ship hull
-    ctx.strokeStyle = '#FFCED8';
+    ctx.fillStyle = '#0A2540'; // Deep maritime navy hull
+    ctx.strokeStyle = '#87C4FF';
     ctx.lineWidth = 1.2;
 
     ctx.beginPath();
@@ -410,7 +410,7 @@ class MaritimeRenderer {
     ctx.stroke();
 
     // Cargo Container Bay
-    ctx.fillStyle = '#FFE8C4';
+    ctx.fillStyle = '#FFEED9'; // Warm Sand cargo crates
     ctx.fillRect(-halfLenPx * 0.5, -halfBmPx * 0.7, halfLenPx * 0.9, halfBmPx * 1.4);
 
     // Navigation Bridge
@@ -418,7 +418,7 @@ class MaritimeRenderer {
     ctx.fillRect(-halfLenPx * 0.85, -halfBmPx * 0.5, halfLenPx * 0.25, halfBmPx * 1.0);
 
     // Rudder Angle Deflection
-    ctx.strokeStyle = '#D9536F';
+    ctx.strokeStyle = '#39A7FF';
     ctx.lineWidth = 2.0;
     ctx.beginPath();
     ctx.moveTo(-halfLenPx, 0);
@@ -427,7 +427,7 @@ class MaritimeRenderer {
     ctx.stroke();
 
     // Heading Vector Arrow
-    ctx.strokeStyle = '#2A9D8F';
+    ctx.strokeStyle = '#0284C7';
     ctx.lineWidth = 2.0;
     ctx.beginPath();
     ctx.moveTo(halfLenPx * 1.15, 0);
@@ -453,7 +453,7 @@ class MaritimeRenderer {
       // Predicted AIS forward track
       ctx.save();
       ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = v.riskLevel === 'COLLISION_ALERT' ? '#DC2626' : 'rgba(224, 90, 109, 0.5)';
+      ctx.strokeStyle = v.riskLevel === 'COLLISION_ALERT' ? '#DC2626' : 'rgba(57, 167, 255, 0.6)';
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.moveTo(px, py);
@@ -477,8 +477,8 @@ class MaritimeRenderer {
         ctx.fillStyle = '#F59E0B';
         ctx.strokeStyle = '#78350F';
       } else {
-        ctx.fillStyle = '#E05A6D'; // Standard red/coral AIS vessel
-        ctx.strokeStyle = '#2C1810';
+        ctx.fillStyle = '#39A7FF'; // Vibrant Ocean Blue AIS vessel
+        ctx.strokeStyle = '#0A2540';
       }
 
       ctx.beginPath();
@@ -506,13 +506,13 @@ class MaritimeRenderer {
       ctx.font = 'bold 8px "Inter", sans-serif';
       const label = `${v.name.split(' ')[0]} | ${v.sog.toFixed(1)}kn`;
       const textW = ctx.measureText(label).width;
-      ctx.fillStyle = 'rgba(255, 244, 222, 0.9)';
-      ctx.strokeStyle = '#FFCED8';
-      ctx.lineWidth = 1;
+      ctx.fillStyle = '#FFEED9';
+      ctx.strokeStyle = '#87C4FF';
+      ctx.lineWidth = 1.2;
       ctx.fillRect(px - textW / 2 - 3, py - 18, textW + 6, 12);
       ctx.strokeRect(px - textW / 2 - 3, py - 18, textW + 6, 12);
 
-      ctx.fillStyle = '#2A1A1E';
+      ctx.fillStyle = '#0A2540';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, px, py - 12);
@@ -533,8 +533,8 @@ class MaritimeRenderer {
       ctx.save();
       ctx.translate(px, py);
       if (obs.type === 'iceberg') {
-        ctx.fillStyle = '#E8F4F8';
-        ctx.strokeStyle = '#64A5B5';
+        ctx.fillStyle = '#E0F4FF';
+        ctx.strokeStyle = '#39A7FF';
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         ctx.moveTo(0, -rPx);
@@ -546,8 +546,8 @@ class MaritimeRenderer {
         ctx.fill();
         ctx.stroke();
       } else if (obs.type === 'debris') {
-        ctx.fillStyle = '#F4A261';
-        ctx.strokeStyle = '#2C1810';
+        ctx.fillStyle = '#FFEED9';
+        ctx.strokeStyle = '#0A2540';
         ctx.fillRect(-rPx * 0.7, -rPx * 0.4, rPx * 1.4, rPx * 0.8);
         ctx.strokeRect(-rPx * 0.7, -rPx * 0.4, rPx * 1.4, rPx * 0.8);
       }
@@ -565,20 +565,20 @@ class MaritimeRenderer {
     const dy = (this.grid.destination.y + 0.5) * this.cellSize;
 
     // Port M: Departure Port (Green Harbor Quay)
-    this.drawPortMarker(ctx, sx, sy, '#2E7D32', 'PORT M (Departure)', `(${this.grid.start.x}, ${this.grid.start.y})`);
+    this.drawPortMarker(ctx, sx, sy, '#16A34A', 'PORT M (Departure)', `(${this.grid.start.x}, ${this.grid.start.y})`);
 
     // Port N: Destination Port (Red Harbor Quay)
-    this.drawPortMarker(ctx, dx, dy, '#C62828', 'PORT N (Destination)', `(${this.grid.destination.x}, ${this.grid.destination.y})`);
+    this.drawPortMarker(ctx, dx, dy, '#DC2626', 'PORT N (Destination)', `(${this.grid.destination.x}, ${this.grid.destination.y})`);
   }
 
   drawPortMarker(ctx, x, y, color, title, coords) {
     ctx.save();
     // Harbor Pier Structure
-    ctx.fillStyle = '#475569';
+    ctx.fillStyle = '#334155';
     ctx.fillRect(x - 6, y + 4, 12, 4);
 
     // Flag Pole
-    ctx.strokeStyle = '#2A1A1E';
+    ctx.strokeStyle = '#0A2540';
     ctx.lineWidth = 2.0;
     ctx.beginPath();
     ctx.moveTo(x, y + 6);
@@ -599,13 +599,13 @@ class MaritimeRenderer {
     const label = `${title} ${coords}`;
     const textW = ctx.measureText(label).width;
 
-    ctx.fillStyle = 'rgba(255, 244, 222, 0.95)';
-    ctx.strokeStyle = '#FFCED8';
-    ctx.lineWidth = 1;
+    ctx.fillStyle = '#FFEED9';
+    ctx.strokeStyle = '#39A7FF';
+    ctx.lineWidth = 1.2;
     ctx.fillRect(x - textW / 2 - 4, y - 30, textW + 8, 14);
     ctx.strokeRect(x - textW / 2 - 4, y - 30, textW + 8, 14);
 
-    ctx.fillStyle = '#2A1A1E';
+    ctx.fillStyle = '#0A2540';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, x, y - 23);
@@ -614,13 +614,13 @@ class MaritimeRenderer {
 
   drawBanners(ctx) {
     if (this.ship.hasReplanned && this.obstacleManager && this.obstacleManager.isReplanning) {
-      this.renderBanner(ctx, '⚠️ DYNAMIC REROUTE ACTIVE: AVOIDING AIS TRAFFIC (PATH B)', '#FFDDDD', '#D9536F');
+      this.renderBanner(ctx, '⚠️ DYNAMIC REROUTE ACTIVE: AVOIDING AIS TRAFFIC (PATH B)', '#FFEED9', '#B91C1C');
     } else if (this.ship.state === 'HOLD_WAIT') {
-      this.renderBanner(ctx, '⏸ HOLD & WAIT MANOEUVRE (REVERSE THRUST)', '#FFE8C4', '#D97706');
+      this.renderBanner(ctx, '⏸ HOLD & WAIT MANOEUVRE (REVERSE THRUST)', '#FFEED9', '#B45309');
     } else if (this.ship.state === 'EMERGENCY_STOP') {
-      this.renderBanner(ctx, '⛔ EMERGENCY SAFE STOP (PASSAGE BLOCKED)', '#FFDDDD', '#B91C1C');
+      this.renderBanner(ctx, '⛔ EMERGENCY SAFE STOP (PASSAGE BLOCKED)', '#FEE2E2', '#991B1B');
     } else if (this.ship.state === 'ARRIVED') {
-      this.renderBanner(ctx, '🏁 DESTINATION PORT N REACHED SAFELY', '#FFF4DE', '#15803D');
+      this.renderBanner(ctx, '🏁 DESTINATION PORT N REACHED SAFELY', '#E0F4FF', '#15803D');
     }
   }
 
@@ -634,7 +634,7 @@ class MaritimeRenderer {
     const by = 14;
 
     ctx.fillStyle = bgColor;
-    ctx.strokeStyle = '#FFCED8';
+    ctx.strokeStyle = '#39A7FF';
     ctx.lineWidth = 1.8;
     ctx.fillRect(bx, by, bannerW, bannerH);
     ctx.strokeRect(bx, by, bannerW, bannerH);
@@ -661,9 +661,9 @@ class MaritimeRenderer {
 
     ctx.save();
     ctx.font = '10px "Inter", sans-serif';
-    ctx.fillStyle = 'rgba(42, 26, 30, 0.88)';
+    ctx.fillStyle = 'rgba(10, 37, 64, 0.9)';
     ctx.fillRect(8, 478, ctx.measureText(text).width + 16, 17);
-    ctx.fillStyle = '#FFF4DE';
+    ctx.fillStyle = '#E0F4FF';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, 16, 486);
     ctx.restore();

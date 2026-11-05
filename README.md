@@ -15,12 +15,12 @@ NavPilot implements the **Three-Stage Hybrid Planning Architecture** (Figure 3.2
 ## 🎨 Strict Color Palette
 
 The entire user interface, navigation charts, tables, telemetry badges, and safety buffers strictly use the requested color theme:
-- **`#FFCED8`** — Dusty Rose Accent (Headers, Primary Buttons, Action Highlights, Obstacle Accents)
-- **`#FFDDDD`** — Blush / Warning / Safety Buffer (Ship Domain $SS$ Envelopes, Dynamic Collision Alerts)
-- **`#FFF4DE`** — Ivory Sea Base (Deep Navigable Sea, Main Application Base, Document Surface)
-- **`#FFE8C4`** — Warm Peach Fairway (Sidebar Panels, Shallow Reef Depths, Table Headers, Control Accents)
+- **`#E0F4FF`** — Soft Azure Sea Base (Deep Navigable Sea, Main Application Canvas Base, Primary Surface)
+- **`#87C4FF`** — Vibrant Sky Blue (Ship Domain $SS$ Safety Envelopes, Card Borders, Secondary Accents)
+- **`#39A7FF`** — Vivid Ocean Blue (Primary Buttons, Active Highlights, Optimized Path Route, Key Boundaries)
+- **`#FFEED9`** — Warm Cream Sand (Control Panels, Headers, Shallow Reef Shoals, Telemetry Badges)
 
-High-contrast espresso dark mahogany (`#2C1810`) is utilized for typography and hull contours to ensure WCAG AAA accessibility and crisp readability on maritime bridge displays.
+High-contrast maritime midnight navy (`#0A2540`) is utilized for typography and hull contours to ensure WCAG AAA accessibility and crisp readability on maritime bridge displays.
 
 ---
 

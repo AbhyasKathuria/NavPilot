@@ -3,32 +3,38 @@
  * Stylesheet (style.css)
  *
  * Strict Color Theme:
- * - #FFCED8 (Dusty Rose / Primary Action Accent)
- * - #FFDDDD (Blush / Danger / Alert / Badge)
- * - #FFF4DE (Ivory Cream / Main Surface Base)
- * - #FFE8C4 (Warm Peach / Panels / Headers / Highlights)
+ * - #E0F4FF (Soft Azure Sea Base / Application Surface)
+ * - #87C4FF (Vibrant Sky Blue / Safety Domain / Borders / Secondary Accents)
+ * - #39A7FF (Deep Ocean Blue / Primary Buttons / Key Highlights / Routes)
+ * - #FFEED9 (Warm Peach Sand / Panels / Headers / Shoals / Cards)
  */
 
 :root {
-  --color-cream: #FFF4DE;
-  --color-peach: #FFE8C4;
-  --color-blush: #FFDDDD;
-  --color-rose: #FFCED8;
+  --color-base: #E0F4FF;     /* Sea Base / Background */
+  --color-sky: #87C4FF;      /* Mid Sky Blue / Accents / Domain */
+  --color-ocean: #39A7FF;    /* Vivid Ocean Blue / Primary */
+  --color-sand: #FFEED9;     /* Warm Cream Sand / Panels / Headers */
 
-  --text-primary: #2C1810;
-  --text-secondary: #5C3D46;
-  --text-muted: #8C6872;
-  --border-subtle: #E8B4BE;
-  --border-strong: #D9536F;
+  /* Semantic Aliases */
+  --color-cream: #E0F4FF;
+  --color-peach: #FFEED9;
+  --color-blush: #87C4FF;
+  --color-rose: #39A7FF;
+
+  --text-primary: #0A2540;
+  --text-secondary: #1E3A5F;
+  --text-muted: #486581;
+  --border-subtle: #87C4FF;
+  --border-strong: #39A7FF;
 
   --accent-success: #15803D;
   --accent-warning: #B45309;
   --accent-danger: #B91C1C;
-  --accent-info: #0369A1;
+  --accent-info: #0284C7;
 
-  --shadow-sm: 0 1px 3px rgba(44, 24, 16, 0.08);
-  --shadow-md: 0 4px 8px rgba(44, 24, 16, 0.12);
-  --shadow-lg: 0 8px 16px rgba(44, 24, 16, 0.16);
+  --shadow-sm: 0 1px 3px rgba(10, 37, 64, 0.08);
+  --shadow-md: 0 4px 8px rgba(10, 37, 64, 0.12);
+  --shadow-lg: 0 8px 16px rgba(10, 37, 64, 0.16);
   --radius: 8px;
   --radius-sm: 4px;
 }
@@ -41,7 +47,7 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  background-color: var(--color-cream);
+  background-color: var(--color-base);
   color: var(--text-primary);
   line-height: 1.45;
   padding: 14px 18px;
@@ -50,8 +56,8 @@ body {
 
 /* Header & Top Bar */
 .app-header {
-  background-color: var(--color-peach);
-  border: 2px solid var(--color-rose);
+  background-color: var(--color-sand);
+  border: 2px solid var(--color-ocean);
   border-radius: var(--radius);
   padding: 12px 20px;
   display: flex;
@@ -70,13 +76,14 @@ body {
 .brand-icon {
   width: 38px;
   height: 38px;
-  background-color: var(--color-rose);
-  border: 2px solid var(--color-blush);
+  background-color: var(--color-ocean);
+  border: 2px solid var(--color-sky);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 20px;
+  box-shadow: var(--shadow-sm);
 }
 
 .app-title {
@@ -99,8 +106,8 @@ body {
 }
 
 .status-pill {
-  background-color: var(--color-cream);
-  border: 1px solid var(--color-rose);
+  background-color: #FFFFFF;
+  border: 1.5px solid var(--color-sky);
   padding: 5px 12px;
   border-radius: 20px;
   font-size: 11px;
@@ -108,22 +115,23 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  color: var(--text-primary);
 }
 
 .status-indicator {
   width: 8px;
   height: 8px;
-  background-color: #2E7D32;
+  background-color: #15803D;
   border-radius: 50%;
-  box-shadow: 0 0 6px #2E7D32;
+  box-shadow: 0 0 6px #15803D;
 }
 
 .repo-link {
   display: flex;
   align-items: center;
   gap: 6px;
-  background-color: var(--color-rose);
-  border: 1px solid var(--border-subtle);
+  background-color: var(--color-sand);
+  border: 1.5px solid var(--color-ocean);
   color: var(--text-primary);
   text-decoration: none;
   font-size: 11px;
@@ -134,7 +142,8 @@ body {
 }
 
 .repo-link:hover {
-  background-color: var(--color-blush);
+  background-color: var(--color-sky);
+  color: #0A2540;
   transform: translateY(-1px);
 }
 
@@ -163,8 +172,8 @@ body {
 
 /* Sidebar & Cards */
 .panel-card {
-  background-color: var(--color-cream);
-  border: 2px solid var(--color-peach);
+  background-color: #FFFFFF;
+  border: 2px solid var(--color-sky);
   border-radius: var(--radius);
   margin-bottom: 12px;
   overflow: hidden;
@@ -172,8 +181,8 @@ body {
 }
 
 .panel-header {
-  background-color: var(--color-peach);
-  border-bottom: 1px solid var(--color-rose);
+  background-color: var(--color-sand);
+  border-bottom: 2px solid var(--color-sky);
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 700;
@@ -185,6 +194,7 @@ body {
 
 .panel-body {
   padding: 10px 12px;
+  background-color: #FFFFFF;
 }
 
 /* Three-Stage Architecture Visual Flowchart */
@@ -196,8 +206,8 @@ body {
 }
 
 .stage-step-card {
-  background-color: #FFFDF9;
-  border: 1.5px solid var(--color-rose);
+  background-color: #F8FAFC;
+  border: 1.5px solid var(--color-sky);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
   display: flex;
@@ -207,8 +217,8 @@ body {
 }
 
 .stage-step-card.active {
-  background-color: var(--color-blush);
-  border-color: var(--border-strong);
+  background-color: rgba(135, 196, 255, 0.25);
+  border-color: var(--color-ocean);
 }
 
 .stage-label {
@@ -224,7 +234,7 @@ body {
 .stage-arrow {
   text-align: center;
   font-size: 10px;
-  color: var(--border-strong);
+  color: var(--color-ocean);
   font-weight: 800;
 }
 
@@ -266,8 +276,8 @@ body {
 .form-control, select, input[type="number"], input[type="text"] {
   width: 100%;
   padding: 5px 8px;
-  background-color: #FFFDF9;
-  border: 1.5px solid var(--color-rose);
+  background-color: #FFFFFF;
+  border: 1.5px solid var(--color-sky);
   border-radius: var(--radius-sm);
   font-size: 11px;
   color: var(--text-primary);
@@ -276,8 +286,8 @@ body {
 }
 
 .form-control:focus, select:focus, input:focus {
-  border-color: var(--border-strong);
-  box-shadow: 0 0 0 2px var(--color-blush);
+  border-color: var(--color-ocean);
+  box-shadow: 0 0 0 2px rgba(135, 196, 255, 0.4);
 }
 
 .param-grid {
@@ -304,8 +314,8 @@ body {
 }
 
 .domain-formula-card {
-  background-color: var(--color-peach);
-  border: 1px solid var(--color-rose);
+  background-color: var(--color-sand);
+  border: 1.5px solid var(--color-sky);
   border-radius: var(--radius-sm);
   padding: 6px 8px;
   margin-top: 8px;
@@ -323,7 +333,7 @@ body {
   font-family: monospace;
   font-size: 11px;
   font-weight: 700;
-  color: var(--border-strong);
+  color: var(--color-ocean);
   margin-top: 2px;
 }
 
@@ -345,38 +355,42 @@ body {
   font-size: 10.5px;
   font-weight: 700;
   cursor: pointer;
-  border: 1.5px solid var(--color-rose);
-  background-color: var(--color-peach);
+  border: 1.5px solid var(--color-sky);
+  background-color: var(--color-sand);
   color: var(--text-primary);
   transition: all 0.15s ease;
   user-select: none;
 }
 
 .btn:hover {
-  background-color: var(--color-rose);
-  border-color: var(--border-subtle);
+  background-color: var(--color-sky);
+  border-color: var(--color-ocean);
+  color: #0A2540;
 }
 
 .btn.active {
-  background-color: var(--color-rose);
-  border-color: var(--border-strong);
-  box-shadow: inset 0 2px 4px rgba(44, 24, 16, 0.15);
+  background-color: var(--color-ocean);
+  color: #FFFFFF;
+  border-color: #0070E0;
+  box-shadow: inset 0 2px 4px rgba(10, 37, 64, 0.2);
 }
 
 .btn-primary {
-  background-color: var(--color-rose);
-  border-color: var(--border-strong);
+  background-color: var(--color-ocean);
+  color: #FFFFFF;
+  border-color: #0070E0;
   font-size: 12px;
   padding: 7px 12px;
 }
 
 .btn-primary:hover {
-  background-color: var(--color-blush);
+  background-color: var(--color-sky);
+  color: #0A2540;
 }
 
 .btn-primary.active {
   background-color: var(--accent-success);
-  color: #FFFDF9;
+  color: #FFFFFF;
   border-color: #0F5132;
 }
 
@@ -400,24 +414,25 @@ body {
 
 .slider-container input[type="range"] {
   flex: 1;
-  accent-color: var(--border-strong);
+  accent-color: var(--color-ocean);
 }
 
 .speed-badge {
   font-size: 10px;
   font-weight: 700;
-  background-color: var(--color-peach);
+  background-color: #FFFFFF;
   padding: 2px 6px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--color-rose);
+  border: 1.5px solid var(--color-sky);
   min-width: 36px;
   text-align: center;
+  color: var(--text-primary);
 }
 
 /* Canvas Area */
 .canvas-wrapper {
-  background-color: var(--color-cream);
-  border: 2px solid var(--color-peach);
+  background-color: var(--color-base);
+  border: 2px solid var(--color-sky);
   border-radius: var(--radius);
   padding: 2px;
   box-shadow: var(--shadow-sm);
@@ -428,8 +443,8 @@ body {
 
 .canvas-header-bar {
   width: 500px;
-  background-color: var(--color-peach);
-  border-bottom: 2px solid var(--color-rose);
+  background-color: var(--color-sand);
+  border-bottom: 2px solid var(--color-sky);
   padding: 6px 10px;
   display: flex;
   justify-content: space-between;
@@ -438,6 +453,7 @@ body {
   font-weight: 700;
   border-top-left-radius: 6px;
   border-top-right-radius: 6px;
+  color: var(--text-primary);
 }
 
 #mapCanvas {
@@ -445,15 +461,15 @@ body {
   height: 500px;
   display: block;
   cursor: crosshair;
-  background-color: var(--color-cream);
+  background-color: var(--color-base);
   border-bottom-left-radius: 6px;
   border-bottom-right-radius: 6px;
 }
 
 .canvas-footer-bar {
   width: 500px;
-  background-color: var(--color-peach);
-  border-top: 1px solid var(--color-rose);
+  background-color: var(--color-sand);
+  border-top: 1.5px solid var(--color-sky);
   padding: 5px 10px;
   display: flex;
   justify-content: space-between;
@@ -471,8 +487,8 @@ body {
 }
 
 .stat-box {
-  background-color: #FFFDF9;
-  border: 1px solid var(--color-rose);
+  background-color: #FFFFFF;
+  border: 1.5px solid var(--color-sky);
   border-radius: var(--radius-sm);
   padding: 5px 7px;
 }
@@ -506,8 +522,8 @@ body {
 }
 
 .ais-table th {
-  background-color: var(--color-peach);
-  border: 1px solid var(--color-rose);
+  background-color: var(--color-sand);
+  border: 1px solid var(--color-sky);
   padding: 4px 6px;
   font-weight: 700;
   color: var(--text-primary);
@@ -516,13 +532,13 @@ body {
 }
 
 .ais-table td {
-  border: 1px solid var(--color-rose);
+  border: 1px solid var(--color-sky);
   padding: 4px 6px;
-  background-color: #FFFDF9;
+  background-color: #FFFFFF;
 }
 
 .ais-table tr:nth-child(even) td {
-  background-color: var(--color-cream);
+  background-color: rgba(224, 244, 255, 0.4);
 }
 
 .ais-table tr.risk-alert td {
@@ -547,25 +563,25 @@ body {
 }
 
 .comparison-table th {
-  background-color: var(--color-peach);
-  border: 1px solid var(--color-rose);
+  background-color: var(--color-sand);
+  border: 1px solid var(--color-sky);
   padding: 5px 6px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .comparison-table td {
-  border: 1px solid var(--color-rose);
+  border: 1px solid var(--color-sky);
   padding: 5px 6px;
-  background-color: #FFFDF9;
+  background-color: #FFFFFF;
 }
 
 .comparison-table tr:nth-child(even) td {
-  background-color: var(--color-cream);
+  background-color: rgba(224, 244, 255, 0.4);
 }
 
 .comparison-table tr.highlight-row td {
-  background-color: var(--color-blush);
+  background-color: rgba(135, 196, 255, 0.3);
   font-weight: 700;
 }
 
@@ -599,8 +615,8 @@ body {
 .log-container {
   height: 140px;
   overflow-y: auto;
-  background-color: #FFFDF9;
-  border: 1px solid var(--color-rose);
+  background-color: #FFFFFF;
+  border: 1.5px solid var(--color-sky);
   border-radius: var(--radius-sm);
   padding: 5px 7px;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
@@ -613,7 +629,7 @@ body {
 
 .log-item {
   padding: 2px 0;
-  border-bottom: 1px solid rgba(255, 206, 216, 0.4);
+  border-bottom: 1px solid rgba(135, 196, 255, 0.3);
 }
 
 .log-time {
@@ -642,8 +658,8 @@ body {
 
 /* Documentation & Explanations Accordion */
 .doc-box {
-  background-color: var(--color-cream);
-  border: 1px solid var(--color-peach);
+  background-color: #FFFFFF;
+  border: 1.5px solid var(--color-sky);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
   font-size: 10px;

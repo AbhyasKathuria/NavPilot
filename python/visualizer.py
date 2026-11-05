@@ -10,7 +10,7 @@ Uses matplotlib to visualize:
 - Stage 2: RRT* Kinematic Refinement (curvature-constrained corridor & tree)
 - Stage 3: Somersault Monkey Search Optimisation (final energy- & time-efficient path)
 - Live AIS Marine Traffic (vessels, SOG, COG, and CPA/TCPA vectors)
-- Adheres strictly to the 4-color palette: #FFCED8, #FFDDDD, #FFF4DE, #FFE8C4
+- Adheres strictly to the 4-color palette: #E0F4FF, #87C4FF, #39A7FF, #FFEED9
 """
 
 import math
@@ -21,16 +21,17 @@ import numpy as np
 
 
 # Palette constants
-COLOR_DEEP_SEA = "#FFF4DE"      # Pale warm cream (deep navigable water)
-COLOR_SHALLOW = "#FFE8C4"       # Light sandy amber (shoal, depth < 12m)
-COLOR_LAND = "#64748B"          # Slate grey island obstacle
-COLOR_ACCENT_PINK = "#FFCED8"   # Warm soft pink
-COLOR_ACCENT_ROSE = "#FFDDDD"   # Rose cream
-COLOR_PANEL_BG = "#FFFBF4"
+COLOR_DEEP_SEA = "#E0F4FF"      # Light Soft Azure (Deep navigable water)
+COLOR_SHALLOW = "#FFEED9"       # Warm Peach Sand (Shoal, depth < draft)
+COLOR_LAND = "#334155"          # Dark Bedrock / Slate Island Obstacle
+COLOR_ACCENT_SKY = "#87C4FF"    # Vibrant Sky Blue / Domain
+COLOR_ACCENT_OCEAN = "#39A7FF"  # Vivid Ocean Blue / Primary Action Accent
+COLOR_ACCENT_SAND = "#FFEED9"   # Warm Sand / Side Panel
+COLOR_PANEL_BG = "#FFFFFF"
 
-COLOR_STAGE1 = "#3B82F6"        # Stage 1: Blue coarse route
-COLOR_STAGE2 = "#F97316"        # Stage 2: Orange kinematic path
-COLOR_STAGE3 = "#E11D48"        # Stage 3: Crimson optimized path
+COLOR_STAGE1 = "#D97706"        # Stage 1: Amber coarse route
+COLOR_STAGE2 = "#0284C7"        # Stage 2: Sky Blue kinematic path
+COLOR_STAGE3 = "#39A7FF"        # Stage 3: Vivid Ocean Blue final path
 COLOR_PORT_M = "#16A34A"        # Green Port M
 COLOR_PORT_N = "#DC2626"        # Red Port N
 
@@ -44,7 +45,7 @@ def plot_simulation(grid,
     """
     Renders high-resolution visualization of the 3-Stage Hybrid Path-Planning Architecture.
     """
-    fig = plt.figure(figsize=(14, 10), facecolor=COLOR_ACCENT_ROSE)
+    fig = plt.figure(figsize=(14, 10), facecolor=COLOR_DEEP_SEA)
     gs = fig.add_gridspec(1, 2, width_ratios=[3.2, 1.8], wspace=0.15)
 
     ax_map = fig.add_subplot(gs[0], facecolor=COLOR_DEEP_SEA)
@@ -53,7 +54,6 @@ def plot_simulation(grid,
     # -------------------------------------------------------------------------
     # 1. RENDER BATHYMETRIC SEA GRID
     # -------------------------------------------------------------------------
-    # Construct RGB image array for 50x50 cells
     grid_img = np.zeros((grid.rows, grid.cols, 3))
 
     hex_to_rgb = lambda h: tuple(int(h.lstrip('#')[i:i+2], 16) / 255.0 for i in (0, 2, 4))
@@ -73,28 +73,28 @@ def plot_simulation(grid,
 
     ax_map.imshow(grid_img, origin='upper', extent=[0, grid.cols, grid.rows, 0])
 
-    # Faint grid lines
+    # Nautical grid lines
     ax_map.set_xticks(np.arange(0, grid.cols + 1, 5))
     ax_map.set_yticks(np.arange(0, grid.rows + 1, 5))
-    ax_map.grid(True, color="#E2D9CC", linestyle=":", linewidth=0.6, alpha=0.7)
+    ax_map.grid(True, color=COLOR_ACCENT_SKY, linestyle=":", linewidth=0.6, alpha=0.45)
 
     # -------------------------------------------------------------------------
     # 2. PLOT PORTS M AND N
     # -------------------------------------------------------------------------
     pm = grid.port_m
     pn = grid.port_n
-    ax_map.scatter([pm["x"]], [pm["y"]], color=COLOR_PORT_M, s=220, zorder=10, edgecolors="#000", linewidths=2)
-    ax_map.scatter([pn["x"]], [pn["y"]], color=COLOR_PORT_N, s=220, zorder=10, edgecolors="#000", linewidths=2)
+    ax_map.scatter([pm["x"]], [pm["y"]], color=COLOR_PORT_M, s=220, zorder=10, edgecolors="#0A2540", linewidths=2)
+    ax_map.scatter([pn["x"]], [pn["y"]], color=COLOR_PORT_N, s=220, zorder=10, edgecolors="#0A2540", linewidths=2)
 
     ax_map.annotate(f"PORT M (Departure)\n({pm['x']}, {pm['y']})",
                     xy=(pm["x"], pm["y"]), xytext=(pm["x"] + 1.2, pm["y"] + 2.5),
                     fontsize=9, fontweight='bold', color="#14532D",
-                    bbox=dict(boxstyle="round,pad=0.25", facecolor=COLOR_ACCENT_ROSE, edgecolor="#16A34A", alpha=0.9))
+                    bbox=dict(boxstyle="round,pad=0.25", facecolor=COLOR_ACCENT_SAND, edgecolor=COLOR_PORT_M, alpha=0.95))
 
     ax_map.annotate(f"PORT N (Destination)\n({pn['x']}, {pn['y']})",
                     xy=(pn["x"], pn["y"]), xytext=(pn["x"] - 9.5, pn["y"] - 1.5),
                     fontsize=9, fontweight='bold', color="#7F1D1D",
-                    bbox=dict(boxstyle="round,pad=0.25", facecolor=COLOR_ACCENT_ROSE, edgecolor="#DC2626", alpha=0.9))
+                    bbox=dict(boxstyle="round,pad=0.25", facecolor=COLOR_ACCENT_SAND, edgecolor=COLOR_PORT_N, alpha=0.95))
 
     # -------------------------------------------------------------------------
     # 3. PLOT THREE-STAGE PATHS
@@ -105,7 +105,7 @@ def plot_simulation(grid,
         if s1 and s1.get("path"):
             s1_x = [p["x"] for p in s1["path"]]
             s1_y = [p["y"] for p in s1["path"]]
-            ax_map.plot(s1_x, s1_y, color=COLOR_STAGE1, linestyle="--", linewidth=1.8, alpha=0.75,
+            ax_map.plot(s1_x, s1_y, color=COLOR_STAGE1, linestyle="--", linewidth=1.8, alpha=0.85,
                         label="Stage 1: A* Global (Coarse)")
 
         # Stage 2: RRT* Kinematic Tree & Path
@@ -113,7 +113,7 @@ def plot_simulation(grid,
         if s2 and s2.get("path"):
             s2_x = [p["x"] for p in s2["path"]]
             s2_y = [p["y"] for p in s2["path"]]
-            ax_map.plot(s2_x, s2_y, color=COLOR_STAGE2, linestyle="-.", linewidth=2.2, alpha=0.85,
+            ax_map.plot(s2_x, s2_y, color=COLOR_STAGE2, linestyle="-.", linewidth=2.2, alpha=0.9,
                         label="Stage 2: RRT* Kinematic Feasible")
 
         # Stage 3: Somersault Monkey Search Final Path
@@ -124,11 +124,10 @@ def plot_simulation(grid,
             ax_map.plot(s3_x, s3_y, color=COLOR_STAGE3, linestyle="-", linewidth=3.5, alpha=0.95,
                         label="Stage 3: Somersault Monkey Search (Final)")
 
-            # Waypoints markers
             if s3.get("waypoints"):
                 wpx = [p["x"] for p in s3["waypoints"]]
                 wpy = [p["y"] for p in s3["waypoints"]]
-                ax_map.scatter(wpx, wpy, color="#881337", s=30, zorder=8, edgecolors="#FFF")
+                ax_map.scatter(wpx, wpy, color="#0A2540", s=30, zorder=8, edgecolors="#FFF")
 
     # -------------------------------------------------------------------------
     # 4. PLOT CARGO SHIP & SHIP DOMAIN
@@ -141,11 +140,11 @@ def plot_simulation(grid,
                                      width=domain_r_cells * 2.6,
                                      height=domain_r_cells * 1.5,
                                      angle=-math.degrees(ship.heading),
-                                     facecolor="#93C5FD",
-                                     edgecolor="#2563EB",
+                                     facecolor=COLOR_ACCENT_SKY,
+                                     edgecolor=COLOR_ACCENT_OCEAN,
                                      linestyle="--",
-                                     linewidth=1.5,
-                                     alpha=0.35,
+                                     linewidth=1.8,
+                                     alpha=0.38,
                                      zorder=9)
     ax_map.add_patch(domain_ellipse)
 
@@ -154,7 +153,7 @@ def plot_simulation(grid,
     ship_beam_cells = ship.beam / grid.cell_size_meters
     hull = patches.Rectangle((-ship_beam_cells / 2.0, -ship_len_cells / 2.0),
                              ship_beam_cells, ship_len_cells,
-                             facecolor="#1E293B", edgecolor="#F8FAFC", linewidth=1.2, zorder=11)
+                             facecolor="#0A2540", edgecolor=COLOR_ACCENT_SKY, linewidth=1.2, zorder=11)
     t = (plt.matplotlib.transforms.Affine2D()
          .rotate(ship.heading + math.pi / 2.0)
          .translate(ship_x, ship_y) + ax_map.transData)
@@ -166,22 +165,22 @@ def plot_simulation(grid,
     # -------------------------------------------------------------------------
     if ais_system and ais_system.vessels:
         for v in ais_system.vessels:
-            ax_map.scatter([v.x], [v.y], color="#991B1B", marker="^", s=110, zorder=9, edgecolors="#FFF")
-            # Heading/speed vector
+            ax_map.scatter([v.x], [v.y], color="#DC2626", marker="^", s=110, zorder=9, edgecolors="#FFF")
             vec_len = v.sog * 0.22
             rad = math.radians(v.cog)
             vx = math.sin(rad) * vec_len
             vy = -math.cos(rad) * vec_len
-            ax_map.arrow(v.x, v.y, vx, vy, color="#DC2626", head_width=0.8, head_length=0.9, linewidth=1.2, zorder=9)
-            ax_map.text(v.x + 0.6, v.y - 0.6, f"{v.name}\n{v.sog}kn", fontsize=7.5, color="#7F1D1D", fontweight="bold")
+            ax_map.arrow(v.x, v.y, vx, vy, color="#EF4444", head_width=0.8, head_length=0.9, linewidth=1.2, zorder=9)
+            ax_map.text(v.x + 0.6, v.y - 0.6, f"{v.name}\n{v.sog}kn", fontsize=7.5, color="#0A2540", fontweight="bold",
+                        bbox=dict(boxstyle="square,pad=0.15", facecolor=COLOR_ACCENT_SAND, edgecolor=COLOR_ACCENT_SKY, alpha=0.9))
 
     ax_map.set_xlim(0, grid.cols)
     ax_map.set_ylim(grid.rows, 0)
-    ax_map.set_xlabel("Easting (Cells, 50m / cell)", fontsize=10, fontweight="bold", color="#334155")
-    ax_map.set_ylabel("Northing (Cells, 50m / cell)", fontsize=10, fontweight="bold", color="#334155")
+    ax_map.set_xlabel("Easting (Cells, 50m / cell)", fontsize=10, fontweight="bold", color="#0A2540")
+    ax_map.set_ylabel("Northing (Cells, 50m / cell)", fontsize=10, fontweight="bold", color="#0A2540")
     ax_map.set_title("NavPilot: Three-Stage Hybrid Path-Planning Architecture\nStage 1: A* -> Stage 2: RRT* Kinematic -> Stage 3: Somersault Monkey Search",
-                     fontsize=11, fontweight="bold", color="#1E293B", pad=10)
-    ax_map.legend(loc="upper left", framealpha=0.92, facecolor=COLOR_ACCENT_ROSE, edgecolor="#E2D9CC", fontsize=8.5)
+                     fontsize=11, fontweight="bold", color="#0A2540", pad=10)
+    ax_map.legend(loc="upper left", framealpha=0.95, facecolor=COLOR_ACCENT_SAND, edgecolor=COLOR_ACCENT_OCEAN, fontsize=8.5)
 
     # -------------------------------------------------------------------------
     # 6. SIDEBAR: TELEMETRY & COMPARISON TABLE
@@ -241,7 +240,7 @@ def plot_simulation(grid,
 
     ax_info.text(0.04, 0.97, info_text, transform=ax_info.transAxes,
                  fontsize=8.5, verticalalignment='top', fontfamily='monospace',
-                 bbox=dict(boxstyle="square,pad=0.6", facecolor=COLOR_ACCENT_PINK, edgecolor="#E2D9CC", alpha=0.9))
+                 bbox=dict(boxstyle="square,pad=0.6", facecolor=COLOR_ACCENT_SAND, edgecolor=COLOR_ACCENT_OCEAN, alpha=0.95))
 
     # Save with tight bounding box
     plt.savefig(save_path, dpi=200, bbox_inches='tight')
