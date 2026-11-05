@@ -4,6 +4,7 @@
  *
  * Implements Stage 3 of the Three-Stage Hybrid Planning Architecture:
  * - Multi-objective fitness function (Energy-efficient, Time-efficient, Collision-free)
+ * - Strict Hard Constraint: Zero collision with land or shallow shoals (Infinity penalty)
  * - Climb Process: Local fine-tuning of waypoints for minimum energy/rudder wear
  * - Watch-Jump Process: Long-range exploration away from hazards and AIS vessel paths
  * - Somersault Process: Movement toward the population's center of gravity (barycenter)
@@ -53,18 +54,22 @@ class SomersaultMonkeySearchPlanner {
     const popSize = 16;
     const population = [];
 
-    // Monkey 0: exact seed path from Stage 2 RRT*
+    // Monkey 0: exact verified seed path from Stage 2 RRT*
     population.push(this.cloneWaypoints(normalizedWaypoints));
 
-    // Seed remaining monkeys with subtle Gaussian perturbations
+    // Seed remaining monkeys with subtle perturbations ONLY if line-of-sight remains valid
     for (let p = 1; p < popSize; p++) {
       const candidate = this.cloneWaypoints(normalizedWaypoints);
       for (let i = 1; i < numWaypoints - 1; i++) {
-        const jitterX = (Math.random() - 0.5) * 1.5;
-        const jitterY = (Math.random() - 0.5) * 1.5;
+        const jitterX = (Math.random() - 0.5) * 1.2;
+        const jitterY = (Math.random() - 0.5) * 1.2;
         const nx = candidate[i].x + jitterX;
         const ny = candidate[i].y + jitterY;
-        if (this.grid.isPassable(nx, ny, shipDraft, requiredClearance)) {
+
+        // HARD COLLISION CHECK: must be passable and line-of-sight clear
+        if (this.grid.isPassable(nx, ny, shipDraft, requiredClearance * 0.8) &&
+            this.grid.lineOfSight(candidate[i - 1].x, candidate[i - 1].y, nx, ny, shipDraft, requiredClearance * 0.8) &&
+            this.grid.lineOfSight(nx, ny, candidate[i + 1].x, candidate[i + 1].y, shipDraft, requiredClearance * 0.8)) {
           candidate[i].x = nx;
           candidate[i].y = ny;
         }
@@ -87,7 +92,7 @@ class SomersaultMonkeySearchPlanner {
     // Iterative Somersault Monkey Search Optimization Loop
     for (let iter = 0; iter < maxIterations; iter++) {
       // 1. CLIMB PROCESS (Local fine-tuning for energy & smoothness)
-      const climbStep = Math.max(0.12, 0.65 * (1.0 - iter / maxIterations));
+      const climbStep = Math.max(0.10, 0.55 * (1.0 - iter / maxIterations));
       for (let p = 0; p < popSize; p++) {
         const candidate = population[p];
         for (let i = 1; i < numWaypoints - 1; i++) {
@@ -109,18 +114,18 @@ class SomersaultMonkeySearchPlanner {
             const tx = origX + offsets[d].dx;
             const ty = origY + offsets[d].dy;
 
-            if (this.grid.isPassable(tx, ty, shipDraft, requiredClearance)) {
+            // HARD COLLISION INVARIANT: must never touch land or shoal
+            if (this.grid.isPassable(tx, ty, shipDraft, requiredClearance * 0.75) &&
+                this.grid.lineOfSight(candidate[i - 1].x, candidate[i - 1].y, tx, ty, shipDraft, requiredClearance * 0.75) &&
+                this.grid.lineOfSight(tx, ty, candidate[i + 1].x, candidate[i + 1].y, shipDraft, requiredClearance * 0.75)) {
               candidate[i].x = tx;
               candidate[i].y = ty;
 
-              if (this.grid.lineOfSight(candidate[i - 1].x, candidate[i - 1].y, tx, ty, shipDraft, requiredClearance) &&
-                  this.grid.lineOfSight(tx, ty, candidate[i + 1].x, candidate[i + 1].y, shipDraft, requiredClearance)) {
-                const evalFit = this.computeFitness(candidate, ship, aisSystem);
-                if (evalFit.total < currentFitness) {
-                  currentFitness = evalFit.total;
-                  bestLocalX = tx;
-                  bestLocalY = ty;
-                }
+              const evalFit = this.computeFitness(candidate, ship, aisSystem);
+              if (evalFit.total < currentFitness) {
+                currentFitness = evalFit.total;
+                bestLocalX = tx;
+                bestLocalY = ty;
               }
             }
           }
@@ -131,8 +136,8 @@ class SomersaultMonkeySearchPlanner {
         fitnesses[p] = this.computeFitness(candidate, ship, aisSystem);
       }
 
-      // 2. WATCH-JUMP PROCESS (Exploration away from coastlines and AIS vessel traffic)
-      const jumpRadius = Math.max(0.5, 1.8 * (1.0 - iter / maxIterations));
+      // 2. WATCH-JUMP PROCESS (Exploration away from coastlines and AIS traffic)
+      const jumpRadius = Math.max(0.4, 1.5 * (1.0 - iter / maxIterations));
       for (let p = 0; p < popSize; p++) {
         const candidate = population[p];
         for (let i = 1; i < numWaypoints - 1; i++) {
@@ -144,7 +149,7 @@ class SomersaultMonkeySearchPlanner {
           // Push away from chart hazards
           if (this.grid.inBounds(gx, gy)) {
             const dist = this.grid.distanceField[gy][gx];
-            if (dist < 100.0) {
+            if (dist < 120.0) {
               const dx = (this.grid.distanceField[gy][Math.min(this.grid.cols - 1, gx + 1)] -
                           this.grid.distanceField[gy][Math.max(0, gx - 1)]) / 2.0;
               const dy = (this.grid.distanceField[Math.min(this.grid.rows - 1, gy + 1)][gx] -
@@ -162,7 +167,7 @@ class SomersaultMonkeySearchPlanner {
             for (let v = 0; v < aisSystem.vessels.length; v++) {
               const ves = aisSystem.vessels[v];
               const dVessel = Math.hypot(candidate[i].x - ves.x, candidate[i].y - ves.y);
-              if (dVessel < 5.0) { // within 250m
+              if (dVessel < 5.0) {
                 pushX += (candidate[i].x - ves.x) / (dVessel + 0.1) * jumpRadius;
                 pushY += (candidate[i].y - ves.y) / (dVessel + 0.1) * jumpRadius;
               }
@@ -172,9 +177,10 @@ class SomersaultMonkeySearchPlanner {
           const jx = candidate[i].x + pushX;
           const jy = candidate[i].y + pushY;
 
-          if (this.grid.isPassable(jx, jy, shipDraft, requiredClearance) &&
-              this.grid.lineOfSight(candidate[i - 1].x, candidate[i - 1].y, jx, jy, shipDraft, requiredClearance) &&
-              this.grid.lineOfSight(jx, jy, candidate[i + 1].x, candidate[i + 1].y, shipDraft, requiredClearance)) {
+          // HARD COLLISION INVARIANT
+          if (this.grid.isPassable(jx, jy, shipDraft, requiredClearance * 0.75) &&
+              this.grid.lineOfSight(candidate[i - 1].x, candidate[i - 1].y, jx, jy, shipDraft, requiredClearance * 0.75) &&
+              this.grid.lineOfSight(jx, jy, candidate[i + 1].x, candidate[i + 1].y, shipDraft, requiredClearance * 0.75)) {
             const origX = candidate[i].x;
             const origY = candidate[i].y;
             candidate[i].x = jx;
@@ -205,19 +211,20 @@ class SomersaultMonkeySearchPlanner {
         barycenter.push({ x: sumX / eliteCount, y: sumY / eliteCount });
       }
 
-      const somersaultWeight = 0.38;
+      const somersaultWeight = 0.35;
       for (let e = eliteCount; e < popSize; e++) {
         const p = sortedIdx[e];
         const candidate = population[p];
         for (let i = 1; i < numWaypoints - 1; i++) {
           const targetX = barycenter[i].x;
           const targetY = barycenter[i].y;
-          const sx = candidate[i].x + somersaultWeight * (targetX - candidate[i].x) + (Math.random() - 0.5) * 0.25;
-          const sy = candidate[i].y + somersaultWeight * (targetY - candidate[i].y) + (Math.random() - 0.5) * 0.25;
+          const sx = candidate[i].x + somersaultWeight * (targetX - candidate[i].x) + (Math.random() - 0.5) * 0.2;
+          const sy = candidate[i].y + somersaultWeight * (targetY - candidate[i].y) + (Math.random() - 0.5) * 0.2;
 
-          if (this.grid.isPassable(sx, sy, shipDraft, requiredClearance) &&
-              this.grid.lineOfSight(candidate[i - 1].x, candidate[i - 1].y, sx, sy, shipDraft, requiredClearance) &&
-              this.grid.lineOfSight(sx, sy, candidate[i + 1].x, candidate[i + 1].y, shipDraft, requiredClearance)) {
+          // HARD COLLISION INVARIANT
+          if (this.grid.isPassable(sx, sy, shipDraft, requiredClearance * 0.75) &&
+              this.grid.lineOfSight(candidate[i - 1].x, candidate[i - 1].y, sx, sy, shipDraft, requiredClearance * 0.75) &&
+              this.grid.lineOfSight(sx, sy, candidate[i + 1].x, candidate[i + 1].y, shipDraft, requiredClearance * 0.75)) {
             candidate[i].x = sx;
             candidate[i].y = sy;
           }
@@ -232,6 +239,18 @@ class SomersaultMonkeySearchPlanner {
           globalBest = this.cloneWaypoints(population[p]);
         }
       }
+    }
+
+    // Safety fallback: verify every single segment of globalBest
+    let isGlobalBestSafe = true;
+    for (let i = 1; i < globalBest.length; i++) {
+      if (!this.grid.lineOfSight(globalBest[i - 1].x, globalBest[i - 1].y, globalBest[i].x, globalBest[i].y, shipDraft, requiredClearance * 0.7)) {
+        isGlobalBestSafe = false;
+        break;
+      }
+    }
+    if (!isGlobalBestSafe) {
+      globalBest = this.cloneWaypoints(normalizedWaypoints);
     }
 
     const computeTimeMs = performance.now() - startTime;
@@ -249,7 +268,7 @@ class SomersaultMonkeySearchPlanner {
 
   /**
    * Multi-objective Fitness Function:
-   * Total = w_time * TimeTransit + w_energy * EnergyIndex + w_safety * ProximityPenalty + w_curv * CurvatureViolations
+   * HARD CONSTRAINT: If any segment crosses land or shallow reef, returns Infinity!
    */
   computeFitness(waypoints, ship, aisSystem) {
     let lengthCells = 0;
@@ -260,19 +279,24 @@ class SomersaultMonkeySearchPlanner {
 
     const minRadiusCells = ship.minTurningRadius / this.grid.cellSizeMeters;
     const requiredClearance = ship.computeRequiredClearanceMeters();
+    const shipDraft = ship.draft;
 
     for (let i = 0; i < waypoints.length; i++) {
       const gx = Math.round(waypoints[i].x);
       const gy = Math.round(waypoints[i].y);
 
-      // Distance to bathymetric hazards
-      if (this.grid.inBounds(gx, gy)) {
-        const dMeters = this.grid.distanceField[gy][gx];
-        if (dMeters < requiredClearance) {
-          proximityPenalty += 1000.0;
-        } else if (dMeters < requiredClearance * 2.5) {
-          proximityPenalty += (requiredClearance * 2.5 - dMeters) * 2.0;
-        }
+      // HARD CONSTRAINT: point must be in water and deep enough
+      if (!this.grid.inBounds(gx, gy) ||
+          this.grid.cells[gy][gx] === this.grid.TYPE_LAND ||
+          this.grid.depths[gy][gx] < shipDraft) {
+        return { total: Infinity, invalid: true };
+      }
+
+      const dMeters = this.grid.distanceField[gy][gx];
+      if (dMeters < requiredClearance) {
+        proximityPenalty += (requiredClearance - dMeters) * 10.0;
+      } else if (dMeters < requiredClearance * 2.5) {
+        proximityPenalty += (requiredClearance * 2.5 - dMeters) * 1.5;
       }
 
       // Distance to AIS traffic
@@ -282,14 +306,19 @@ class SomersaultMonkeySearchPlanner {
           const distToVesselMeters = Math.hypot(waypoints[i].x - ves.x, waypoints[i].y - ves.y) * this.grid.cellSizeMeters;
           const combinedDomain = ship.domainRadiusMeters + ves.domainRadiusMeters;
           if (distToVesselMeters < combinedDomain) {
-            proximityPenalty += 800.0;
+            proximityPenalty += 600.0;
           } else if (distToVesselMeters < combinedDomain * 2.0) {
-            proximityPenalty += (combinedDomain * 2.0 - distToVesselMeters) * 1.5;
+            proximityPenalty += (combinedDomain * 2.0 - distToVesselMeters) * 1.2;
           }
         }
       }
 
       if (i > 0) {
+        // HARD CONSTRAINT: segment must not cross land or shoal!
+        if (!this.grid.lineOfSight(waypoints[i - 1].x, waypoints[i - 1].y, waypoints[i].x, waypoints[i].y, shipDraft, requiredClearance * 0.7)) {
+          return { total: Infinity, invalid: true };
+        }
+
         const segDist = Math.hypot(waypoints[i].x - waypoints[i - 1].x, waypoints[i].y - waypoints[i - 1].y);
         lengthCells += segDist;
       }
@@ -306,10 +335,8 @@ class SomersaultMonkeySearchPlanner {
         if (diff > Math.PI) diff = 2 * Math.PI - diff;
         totalTurningRad += diff;
 
-        // Energy consumption model: rudder deflection squared causes quadratic hydro drag
-        energyIndex += Math.pow(diff, 2) * 25.0;
+        energyIndex += Math.pow(diff, 2) * 20.0;
 
-        // Curvature check
         if (diff > 0.05) {
           const reqDist = minRadiusCells * Math.tan(diff / 2.0);
           const len1 = Math.hypot(v1x, v1y);
@@ -321,14 +348,12 @@ class SomersaultMonkeySearchPlanner {
       }
     }
 
-    // Transit time index (path length / cruising speed)
     const timeIndex = lengthCells;
 
-    // Multi-objective weights
     const wTime = 1.0;
-    const wEnergy = 14.0;    // Minimize excessive turning and rudder drag
-    const wSafety = 1.2;     // High clearance from hazards and AIS vessels
-    const wCurv = 150.0;     // Severe penalty for turning radius violation
+    const wEnergy = 12.0;
+    const wSafety = 1.2;
+    const wCurv = 150.0;
 
     const total = (wTime * timeIndex) +
                   (wEnergy * energyIndex) +

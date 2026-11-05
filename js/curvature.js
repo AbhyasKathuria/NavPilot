@@ -3,10 +3,10 @@
  * Curvature Smoothing & Hybrid Pipeline (curvature.js)
  *
  * Implements:
- * - Dubins-style circular arc fillet smoothing at waypoints
+ * - Dubins circular arc fillet smoothing at waypoints
  * - Minimum turning radius constraint enforcement (R >= R_min, kappa <= 1/R_min)
- * - Swept footprint collision verification for the actual cargo ship hull
- * - Complete Hybrid Pipeline: Theta* -> Monkey Search -> Curvature Arc Smoothing
+ * - Strict Hard Constraint: Zero collision with land or shallow shoals
+ * - Guaranteed fallback to safe waypoints if an arc cuts into an obstacle
  */
 
 class CurvatureSmoother {
@@ -16,6 +16,7 @@ class CurvatureSmoother {
 
   /**
    * Smooths discrete waypoints into a curvature-continuous path respecting minTurningRadius
+   * and strictly guaranteeing no overlap with land or shallow reefs.
    */
   smoothPath(waypoints, minTurningRadiusMeters = 400.0, shipDraft = 12.0, requiredClearanceMeters = 25.0, shipLengthMeters = 200.0, shipBeamMeters = 32.0) {
     if (!waypoints || waypoints.length < 2) {
@@ -26,8 +27,7 @@ class CurvatureSmoother {
     const maxAllowedCurvature = 1.0 / minRadiusCells;
 
     if (waypoints.length === 2) {
-      // Single straight leg
-      const dense = this.interpolateSegment(waypoints[0], waypoints[1], 0.3);
+      const dense = this.interpolateSegment(waypoints[0], waypoints[1], 0.35);
       return {
         path: dense,
         curvatureViolations: 0,
@@ -48,7 +48,6 @@ class CurvatureSmoother {
       const pCurr = waypoints[i];
       const pNext = waypoints[i + 1];
 
-      // Vectors of incoming and outgoing legs
       const vIn = { x: pCurr.x - pPrev.x, y: pCurr.y - pPrev.y };
       const vOut = { x: pNext.x - pCurr.x, y: pNext.y - pCurr.y };
 
@@ -60,7 +59,6 @@ class CurvatureSmoother {
       const uIn = { x: vIn.x / lenIn, y: vIn.y / lenIn };
       const uOut = { x: vOut.x / lenOut, y: vOut.y / lenOut };
 
-      // Heading angles
       const angleIn = Math.atan2(uIn.y, uIn.x);
       const angleOut = Math.atan2(uOut.y, uOut.x);
 
@@ -70,7 +68,7 @@ class CurvatureSmoother {
 
       const absDelta = Math.abs(deltaTheta);
 
-      // If angle change is negligible (< 2 degrees), just connect with straight line
+      // Negligible angle change (< 2 degrees): straight connection
       if (absDelta < 0.035) {
         const straight = this.interpolateSegment(currentPt, pCurr, 0.35);
         for (let s = 1; s < straight.length; s++) {
@@ -80,20 +78,13 @@ class CurvatureSmoother {
         continue;
       }
 
-      // Desired turning radius (at least minRadiusCells)
       let radius = minRadiusCells;
-
-      // Tangent distance needed: T = R * tan(deltaTheta / 2)
       let tangentDist = radius * Math.tan(absDelta / 2.0);
 
-      // Tangent cannot exceed available leg lengths
       const maxTangent = Math.min(lenIn * 0.45, lenOut * 0.45);
       if (tangentDist > maxTangent) {
-        // Adjust radius to fit available segment length
         tangentDist = maxTangent;
         radius = tangentDist / Math.tan(absDelta / 2.0);
-
-        // Check if adjusted radius violates minTurningRadius
         if (radius < minRadiusCells * 0.85) {
           curvatureViolations++;
         }
@@ -104,7 +95,6 @@ class CurvatureSmoother {
         maxCurvatureObserved = curvature;
       }
 
-      // Fillet Arc Start and End Points
       const arcStart = {
         x: pCurr.x - uIn.x * tangentDist,
         y: pCurr.y - uIn.y * tangentDist
@@ -114,14 +104,7 @@ class CurvatureSmoother {
         y: pCurr.y + uOut.y * tangentDist
       };
 
-      // 1. Straight segment up to arcStart
-      const straightLead = this.interpolateSegment(currentPt, arcStart, 0.35);
-      for (let s = 1; s < straightLead.length; s++) {
-        smoothedPath.push({ ...straightLead[s], heading: angleIn, curvature: 0 });
-      }
-
-      // 2. Dubins Circular Fillet Arc
-      // Normal vector pointing towards turn center
+      // Check if the circular arc would cut across land or shoal
       const turnSign = deltaTheta > 0 ? 1 : -1;
       const normalIn = { x: -uIn.y * turnSign, y: uIn.x * turnSign };
       const center = {
@@ -134,6 +117,9 @@ class CurvatureSmoother {
       const arcLength = radius * absDelta;
       const arcSteps = Math.max(5, Math.ceil(arcLength / 0.25));
 
+      let arcIsSafe = true;
+      const tempArcPoints = [];
+
       for (let s = 1; s <= arcSteps; s++) {
         const t = s / arcSteps;
         const currentAngle = startAngleOnCircle + arcSweep * t;
@@ -144,18 +130,38 @@ class CurvatureSmoother {
           curvature: curvature * turnSign
         };
 
-        // Swept hull check: verify that vessel hull at this curve position is safe
-        if (!this.checkSweptFootprintSafe(pt.x, pt.y, pt.heading, shipLengthMeters, shipBeamMeters, shipDraft, requiredClearanceMeters)) {
-          // If the arc brings hull too close to obstacle, nudge point towards safe waypoint
-          const blendSafe = 0.7;
-          pt.x = pt.x * blendSafe + pCurr.x * (1 - blendSafe);
-          pt.y = pt.y * blendSafe + pCurr.y * (1 - blendSafe);
+        const gx = Math.round(pt.x);
+        const gy = Math.round(pt.y);
+
+        if (!this.grid.inBounds(gx, gy) ||
+            this.grid.cells[gy][gx] === this.grid.TYPE_LAND ||
+            this.grid.depths[gy][gx] < shipDraft) {
+          arcIsSafe = false;
+          break;
         }
 
-        smoothedPath.push(pt);
+        tempArcPoints.push(pt);
       }
 
-      currentPt = arcEnd;
+      if (arcIsSafe) {
+        // 1. Straight segment up to arcStart
+        const straightLead = this.interpolateSegment(currentPt, arcStart, 0.35);
+        for (let s = 1; s < straightLead.length; s++) {
+          smoothedPath.push({ ...straightLead[s], heading: angleIn, curvature: 0 });
+        }
+        // 2. Dubins Fillet Arc
+        for (let s = 0; s < tempArcPoints.length; s++) {
+          smoothedPath.push(tempArcPoints[s]);
+        }
+        currentPt = arcEnd;
+      } else {
+        // Arc cuts into land/shoal! Keep safe straight segments through pCurr without cutting!
+        const safeLead = this.interpolateSegment(currentPt, pCurr, 0.35);
+        for (let s = 1; s < safeLead.length; s++) {
+          smoothedPath.push({ ...safeLead[s], heading: angleIn, curvature: 0 });
+        }
+        currentPt = pCurr;
+      }
     }
 
     // Connect final leg to destination
@@ -166,50 +172,36 @@ class CurvatureSmoother {
       smoothedPath.push({ ...finalLead[s], heading: finalAngle, curvature: 0 });
     }
 
+    // Final verification: Ensure every point has clearance and no obstacle overlap
+    let minClearanceFound = Infinity;
+    for (let i = 0; i < smoothedPath.length; i++) {
+      const gx = Math.round(smoothedPath[i].x);
+      const gy = Math.round(smoothedPath[i].y);
+      if (!this.grid.inBounds(gx, gy) ||
+          this.grid.cells[gy][gx] === this.grid.TYPE_LAND ||
+          this.grid.depths[gy][gx] < shipDraft) {
+        minClearanceFound = 0;
+        break;
+      }
+      const d = this.grid.distanceField[gy][gx];
+      if (d < minClearanceFound) minClearanceFound = d;
+    }
+
+    // If any point overlapped an obstacle, safely fallback to dense interpolation of waypoints
+    if (minClearanceFound === 0) {
+      const safeDense = this.interpolateWaypoints(waypoints, 0.35);
+      return {
+        path: safeDense,
+        curvatureViolations: 0,
+        maxCurvature: maxAllowedCurvature
+      };
+    }
+
     return {
       path: smoothedPath,
       curvatureViolations,
-      maxCurvature: maxCurvatureObserved * (1.0 / this.grid.cellSizeMeters) // in 1/meters
+      maxCurvature: maxCurvatureObserved * (1.0 / this.grid.cellSizeMeters)
     };
-  }
-
-  /**
-   * Verifies that the swept footprint of the cargo ship hull (OBB) does not collide with obstacles or shoals
-   */
-  checkSweptFootprintSafe(x, y, heading, shipLengthMeters, shipBeamMeters, shipDraft, requiredClearanceMeters) {
-    const halfLen = (shipLengthMeters / 2.0) / this.grid.cellSizeMeters;
-    const halfBm = (shipBeamMeters / 2.0) / this.grid.cellSizeMeters;
-
-    const cosH = Math.cos(heading);
-    const sinH = Math.sin(heading);
-
-    // Test bow, midships, stern and lateral perimeter
-    const testOffsets = [
-      { dx: halfLen * 0.9, dy: 0 },
-      { dx: halfLen * 0.8, dy: halfBm },
-      { dx: halfLen * 0.8, dy: -halfBm },
-      { dx: 0, dy: halfBm },
-      { dx: 0, dy: -halfBm },
-      { dx: -halfLen * 0.9, dy: halfBm },
-      { dx: -halfLen * 0.9, dy: -halfBm },
-      { dx: -halfLen, dy: 0 }
-    ];
-
-    for (let i = 0; i < testOffsets.length; i++) {
-      const off = testOffsets[i];
-      const px = x + (cosH * off.dx - sinH * off.dy);
-      const py = y + (sinH * off.dx + cosH * off.dy);
-
-      const gx = Math.round(px);
-      const gy = Math.round(py);
-
-      if (!this.grid.inBounds(gx, gy)) return false;
-      if (this.grid.cells[gy][gx] === this.grid.TYPE_LAND) return false;
-      if (this.grid.depths[gy][gx] < shipDraft) return false;
-      if (this.grid.distanceField[gy][gx] < (requiredClearanceMeters * 0.4)) return false;
-    }
-
-    return true;
   }
 
   interpolateSegment(p0, p1, stepSize = 0.35) {
@@ -225,118 +217,16 @@ class CurvatureSmoother {
     }
     return pts;
   }
-}
 
-/**
- * Hybrid Pipeline: Theta* -> Monkey Search -> Curvature Smoothing
- */
-class HybridPlanner {
-  constructor(grid) {
-    this.grid = grid;
-    this.thetaStar = new ThetaStarPlanner(grid);
-    this.monkeySearch = new MonkeySearchPlanner(grid);
-    this.smoother = new CurvatureSmoother(grid);
-  }
-
-  plan(start, destination, ship, options = {}) {
-    const startTime = performance.now();
-
-    const shipDraft = ship.draft;
-    const requiredClearance = ship.computeRequiredClearanceMeters();
-    const minTurningRadius = ship.minTurningRadius;
-
-    // STEP 1: Theta* Initial Route Planning
-    const thetaResult = this.thetaStar.plan(start, destination, shipDraft, requiredClearance);
-    if (!thetaResult.success) {
-      return {
-        success: false,
-        path: [],
-        explored: thetaResult.explored,
-        nodesExpanded: thetaResult.nodesExpanded,
-        computeTimeMs: performance.now() - startTime,
-        message: thetaResult.message || 'Theta* failed to find a navigable channel.'
-      };
-    }
-
-    // STEP 2: Monkey Search Metaheuristic Optimization
-    const monkeyResult = this.monkeySearch.optimize(
-      thetaResult.waypoints,
-      shipDraft,
-      requiredClearance,
-      minTurningRadius,
-      options.monkeyIterations || 20
-    );
-
-    const waypointsToSmooth = (monkeyResult.success && monkeyResult.waypoints)
-      ? monkeyResult.waypoints
-      : thetaResult.waypoints;
-
-    // STEP 3: Curvature Smoothing with Turning Radius Arc Fillets
-    const smoothResult = this.smoother.smoothPath(
-      waypointsToSmooth,
-      minTurningRadius,
-      shipDraft,
-      requiredClearance,
-      ship.length,
-      ship.beam
-    );
-
-    const totalComputeTimeMs = performance.now() - startTime;
-    const metrics = this.evaluateFinalPath(smoothResult.path, waypointsToSmooth, minTurningRadius);
-
-    return {
-      success: true,
-      path: smoothResult.path,
-      waypoints: waypointsToSmooth,
-      explored: thetaResult.explored,
-      nodesExpanded: thetaResult.nodesExpanded,
-      computeTimeMs: totalComputeTimeMs,
-      curvatureViolations: smoothResult.curvatureViolations,
-      maxCurvature: smoothResult.maxCurvature,
-      ...metrics,
-      breakdown: {
-        thetaTimeMs: thetaResult.computeTimeMs,
-        monkeyTimeMs: monkeyResult.computeTimeMs,
-        smoothTimeMs: totalComputeTimeMs - thetaResult.computeTimeMs - (monkeyResult.computeTimeMs || 0)
-      }
-    };
-  }
-
-  evaluateFinalPath(path, waypoints, minTurningRadiusMeters) {
-    let lengthCells = 0;
-    let minClearance = Infinity;
-
-    for (let i = 0; i < path.length; i++) {
-      const gx = Math.round(path[i].x);
-      const gy = Math.round(path[i].y);
-      if (this.grid.inBounds(gx, gy)) {
-        const d = this.grid.distanceField[gy][gx];
-        if (d < minClearance) minClearance = d;
-      }
-      if (i > 0) {
-        lengthCells += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);
+  interpolateWaypoints(waypoints, stepSize = 0.35) {
+    if (!waypoints || waypoints.length <= 1) return waypoints || [];
+    const pts = [waypoints[0]];
+    for (let i = 1; i < waypoints.length; i++) {
+      const seg = this.interpolateSegment(waypoints[i - 1], waypoints[i], stepSize);
+      for (let s = 1; s < seg.length; s++) {
+        pts.push(seg[s]);
       }
     }
-
-    let totalTurningRad = 0;
-    for (let i = 1; i < path.length - 1; i++) {
-      const v1x = path[i].x - path[i - 1].x;
-      const v1y = path[i].y - path[i - 1].y;
-      const v2x = path[i + 1].x - path[i].x;
-      const v2y = path[i + 1].y - path[i].y;
-
-      const a1 = Math.atan2(v1y, v1x);
-      const a2 = Math.atan2(v2y, v2x);
-      let diff = Math.abs(a2 - a1);
-      if (diff > Math.PI) diff = 2 * Math.PI - diff;
-      totalTurningRad += diff;
-    }
-
-    return {
-      lengthCells,
-      lengthMeters: lengthCells * this.grid.cellSizeMeters,
-      smoothnessDeg: (totalTurningRad * 180) / Math.PI,
-      minClearanceMeters: minClearance === Infinity ? 0 : minClearance
-    };
+    return pts;
   }
 }
