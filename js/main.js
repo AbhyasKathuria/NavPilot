@@ -2,15 +2,16 @@
  * NavPilot - Cargo Ship Real-Time Path-Planning Simulator
  * Main Application Orchestrator (main.js)
  *
- * Connects UI controls, canvas events, algorithm runners,
- * benchmark comparison table, dynamic collision detection, and animation loop.
+ * Implements Three-Stage Hybrid Planning Pipeline:
+ * Stage 1: A* Global Path Search (grid-based)
+ * Stage 2: RRT* Kinematic Refinement (curvature-constrained)
+ * Stage 3: Somersault Monkey Search Optimisation (multi-objective)
+ * AIS Data simulation, Ship Domain (SS = L * B * D), Ports M and N.
  */
 
 window.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
   const canvas = document.getElementById('mapCanvas');
-  const algSelect = document.getElementById('algSelect');
-  const mapPresetSelect = document.getElementById('mapPresetSelect');
   const speedSlider = document.getElementById('speedSlider');
   const speedDisplay = document.getElementById('speedDisplay');
 
@@ -18,10 +19,19 @@ window.addEventListener('DOMContentLoaded', () => {
   const btnRun = document.getElementById('btnRun');
   const btnPause = document.getElementById('btnPause');
   const btnReset = document.getElementById('btnReset');
+  const btnRunPipeline = document.getElementById('btnRunPipeline');
   const btnBenchmark = document.getElementById('btnBenchmark');
   const btnRandomMap = document.getElementById('btnRandomMap');
   const btnClearObstacles = document.getElementById('btnClearObstacles');
-  const btnAddDynamic = document.getElementById('btnAddDynamic');
+  const btnAddAIS = document.getElementById('btnAddAIS');
+  const btnSpawnAIS = document.getElementById('btnSpawnAIS');
+
+  // Visualization Layer Checkboxes
+  const chkStage1 = document.getElementById('chkStage1');
+  const chkStage2 = document.getElementById('chkStage2');
+  const chkStage3 = document.getElementById('chkStage3');
+  const chkShipDomain = document.getElementById('chkShipDomain');
+  const chkAISTraffic = document.getElementById('chkAISTraffic');
 
   // Interactive Tools
   const toolButtons = {
@@ -43,22 +53,29 @@ window.addEventListener('DOMContentLoaded', () => {
     minTurningRadius: document.getElementById('paramTurnRadius')
   };
 
-  // Live Stats Elements
+  // Ship Domain Displays
+  const domainVolDisplay = document.getElementById('domainVolDisplay');
+  const domainCalcText = document.getElementById('domainCalcText');
+  const lblPortM = document.getElementById('lblPortM');
+  const lblPortN = document.getElementById('lblPortN');
+
+  // Live Telemetry Elements
   const statAlg = document.getElementById('statAlg');
   const statNodes = document.getElementById('statNodes');
   const statLength = document.getElementById('statLength');
   const statSmoothness = document.getElementById('statSmoothness');
-  const statTime = document.getElementById('statTime');
-  const statReplans = document.getElementById('statReplans');
+  const statEnergy = document.getElementById('statEnergy');
+  const statETA = document.getElementById('statETA');
   const statClearance = document.getElementById('statClearance');
   const statStopping = document.getElementById('statStopping');
   const statSpeed = document.getElementById('statSpeed');
-  const statETA = document.getElementById('statETA');
+  const statReplans = document.getElementById('statReplans');
 
-  // Log and Table
+  // Log and Tables
+  const aisTrafficTbody = document.getElementById('aisTrafficTbody');
+  const comparisonTbody = document.getElementById('comparisonTbody');
   const eventLogList = document.getElementById('eventLogList');
   const btnClearLog = document.getElementById('btnClearLog');
-  const comparisonTbody = document.getElementById('comparisonTbody');
 
   // State Management
   let activeTool = 'paint_obstacle';
@@ -66,8 +83,9 @@ window.addEventListener('DOMContentLoaded', () => {
   let simulationSpeed = 1.0;
   let isMouseDown = false;
   let lastFrameTime = performance.now();
+  let lastAisTableUpdate = 0;
 
-  // Core Instances
+  // Core Simulation Model Instances
   const grid = new SeaGrid(50, 50, 50); // 50x50 cells, 50m per cell
   const ship = new CargoShip({
     length: 200,
@@ -78,14 +96,15 @@ window.addEventListener('DOMContentLoaded', () => {
     minTurningRadius: 400
   });
 
-  const obstacleManager = new DynamicObstacleManager(grid);
-  const renderer = new MaritimeRenderer(canvas, grid, ship, obstacleManager);
+  const aisSystem = new AISSystem(grid);
+  const obstacleManager = new DynamicObstacleManager(grid, aisSystem);
+  const renderer = new MaritimeRenderer(canvas, grid, ship, aisSystem, obstacleManager);
 
-  // Planners
+  // Planners for the Three-Stage Architecture
   const aStarPlanner = new AStarPlanner(grid);
-  const thetaStarPlanner = new ThetaStarPlanner(grid);
-  const monkeySearchPlanner = new MonkeySearchPlanner(grid);
-  const hybridPlanner = new HybridPlanner(grid);
+  const rrtStarPlanner = new RRTStarPlanner(grid);
+  const monkeySearchPlanner = new SomersaultMonkeySearchPlanner(grid);
+  const threeStagePlanner = new ThreeStageHybridPlanner(grid);
 
   // Logging Helper
   function logEvent(message, type = 'info') {
@@ -99,83 +118,104 @@ window.addEventListener('DOMContentLoaded', () => {
     eventLogList.scrollTop = eventLogList.scrollHeight;
   }
 
-  logEvent('NavPilot maritime simulator initialized. 50x50 bathymetric grid loaded (2500m × 2500m).', 'info');
-  logEvent('Default Cargo Ship: 200m x 32m, 50,000t, min turn radius 400m, draft 12m.', 'info');
+  logEvent('NavPilot Three-Stage Hybrid maritime system initialized.', 'info');
+  logEvent('Ship Domain formula: SS = L * B * D. Initial ports: Port M (5, 44) -> Port N (44, 6).', 'info');
+  logEvent('AIS System broadcasting live marine traffic for 4 commercial vessels.', 'info');
 
-  // Spawn initial dynamic obstacles
-  function spawnInitialDynamicObstacles() {
-    obstacleManager.clear();
-    obstacleManager.addObstacle(18, 12, 0.45, 0.7, 'vessel', 38);
-    obstacleManager.addObstacle(36, 32, -0.6, -0.4, 'vessel', 30);
-    obstacleManager.addObstacle(28, 14, 0.15, 0.2, 'iceberg', 32);
-    obstacleManager.addObstacle(12, 38, 0.1, -0.15, 'debris', 20);
-    logEvent('4 dynamic hazards spawned (2 vessels, 1 iceberg, 1 container).', 'info');
-  }
-  spawnInitialDynamicObstacles();
+  // Layer Checkbox Listeners
+  if (chkStage1) chkStage1.addEventListener('change', () => { renderer.showStage1 = chkStage1.checked; });
+  if (chkStage2) chkStage2.addEventListener('change', () => { renderer.showStage2 = chkStage2.checked; });
+  if (chkStage3) chkStage3.addEventListener('change', () => { renderer.showStage3 = chkStage3.checked; });
+  if (chkShipDomain) chkShipDomain.addEventListener('change', () => { renderer.showShipDomain = chkShipDomain.checked; });
+  if (chkAISTraffic) chkAISTraffic.addEventListener('change', () => { renderer.showAISTraffic = chkAISTraffic.checked; });
 
-  // Active Planner Helper
-  function getActivePlanner() {
-    const alg = algSelect ? algSelect.value : 'hybrid';
-    return {
-      name: alg,
-      plan: (start, dest, vessel) => {
-        const draft = vessel.draft;
-        const clearance = vessel.computeRequiredClearanceMeters();
-        const minRadius = vessel.minTurningRadius;
-
-        if (alg === 'astar') {
-          return aStarPlanner.plan(start, dest, draft, clearance);
-        } else if (alg === 'thetastar') {
-          return thetaStarPlanner.plan(start, dest, draft, clearance);
-        } else if (alg === 'monkey') {
-          const thetaSeed = thetaStarPlanner.plan(start, dest, draft, clearance);
-          if (!thetaSeed.success) return thetaSeed;
-          return monkeySearchPlanner.optimize(thetaSeed.waypoints, draft, clearance, minRadius, 25);
-        } else {
-          return hybridPlanner.plan(start, dest, vessel);
-        }
-      }
-    };
+  // Update Ship Domain Display
+  function updateDomainDisplay() {
+    const vol = ship.shipDomainVolume;
+    if (domainVolDisplay) domainVolDisplay.textContent = `${(vol / 1000).toFixed(1)}k m³`;
+    if (domainCalcText) {
+      domainCalcText.textContent = `${ship.length}m × ${ship.beam}m × ${ship.draft}m = ${vol.toLocaleString()} m³ (Domain radius: ${ship.domainRadiusMeters.toFixed(1)}m)`;
+    }
+    if (lblPortM) lblPortM.textContent = `Port M (${grid.start.x}, ${grid.start.y})`;
+    if (lblPortN) lblPortN.textContent = `Port N (${grid.destination.x}, ${grid.destination.y})`;
+    if (statStopping) statStopping.textContent = `${ship.computeStoppingDistanceMeters().toFixed(0)} m`;
   }
 
-  // Execute Route Computation
-  function computeAndApplyRoute(autoStartSimulation = true) {
-    const planner = getActivePlanner();
-    logEvent(`Planning route from (${grid.start.x}, ${grid.start.y}) to (${grid.destination.x}, ${grid.destination.y}) via ${planner.name.toUpperCase()}...`, 'info');
+  // Update AIS Marine Traffic Table
+  function updateAISTrafficTable() {
+    if (!aisTrafficTbody) return;
+    aisTrafficTbody.innerHTML = '';
 
-    const result = planner.plan(grid.start, grid.destination, ship);
+    aisSystem.vessels.forEach(v => {
+      const tr = document.createElement('tr');
+      if (v.riskLevel === 'COLLISION_ALERT') tr.className = 'risk-alert';
+      else if (v.riskLevel === 'WARNING') tr.className = 'risk-warning';
+
+      let riskBadge = '<span class="badge badge-success">Clear</span>';
+      if (v.riskLevel === 'COLLISION_ALERT') riskBadge = '<span class="badge badge-danger">Alert</span>';
+      else if (v.riskLevel === 'WARNING') riskBadge = '<span class="badge badge-warning">Caution</span>';
+
+      const cpaStr = v.cpaMeters !== Infinity ? `${v.cpaMeters.toFixed(0)}m` : '—';
+      const tcpaStr = v.tcpaSeconds !== Infinity ? `${v.tcpaSeconds.toFixed(1)}s` : '—';
+
+      tr.innerHTML = `
+        <td>${v.mmsi}</td>
+        <td><strong>${v.name}</strong></td>
+        <td>${v.type}</td>
+        <td>${v.sog.toFixed(1)} kn</td>
+        <td>${v.cog.toFixed(0)}°</td>
+        <td>${cpaStr}</td>
+        <td>${tcpaStr}</td>
+        <td>${riskBadge}</td>
+      `;
+      aisTrafficTbody.appendChild(tr);
+    });
+  }
+
+  // Execute Three-Stage Hybrid Pipeline
+  function executeThreeStagePipeline(autoStartSimulation = true) {
+    logEvent(`Stage 1: A* Global Search from Port M (${grid.start.x}, ${grid.start.y}) to Port N (${grid.destination.x}, ${grid.destination.y})...`, 'info');
+
+    const result = threeStagePlanner.plan(grid.start, grid.destination, ship, aisSystem);
 
     if (!result.success || !result.path || result.path.length === 0) {
-      logEvent(`Path planning failed: ${result.message || 'No navigable corridor'}`, 'error');
+      logEvent(`Three-Stage Pipeline failed: ${result.message}`, 'error');
       if (autoStartSimulation) {
-        alert(`Path Planning Failed: ${result.message || 'No feasible path exists without collision'}`);
+        alert(`Path Planning Failed: ${result.message}`);
       }
       return;
     }
 
-    logEvent(`Path computed successfully: ${result.lengthMeters.toFixed(0)}m length, ${result.smoothnessDeg.toFixed(1)}° total turn, ${result.computeTimeMs.toFixed(1)}ms.`, 'success');
+    logEvent(`Stage 1 (A*) complete: coarse waypoint route (${result.stage1.lengthMeters.toFixed(0)}m, ${result.stage1.computeTimeMs.toFixed(1)}ms).`, 'success');
+    logEvent(`Stage 2 (RRT*) complete: curvature-constrained feasible path (${result.stage2.computeTimeMs.toFixed(1)}ms, R >= ${ship.minTurningRadius}m).`, 'success');
+    logEvent(`Stage 3 (Somersault Monkey Search) complete: final multi-objective ASV route (${result.stage3.computeTimeMs.toFixed(1)}ms, Energy Index: ${result.stage3.energyIndex}).`, 'success');
 
-    // Update Live Stats
-    if (statAlg) statAlg.textContent = planner.name.toUpperCase();
-    if (statNodes) statNodes.textContent = result.nodesExpanded !== undefined ? result.nodesExpanded : 'N/A';
+    // Update ship paths for rendering
+    ship.setStagePaths(result.stage1.path, result.stage2.path, result.stage3.path);
+
+    // Update Live Telemetry
+    if (statAlg) statAlg.textContent = 'HYBRID 3-STAGE';
+    if (statNodes) statNodes.textContent = `${result.stage1.nodesExpanded} (A*) | ${result.stage2.tree.length} (RRT*)`;
     if (statLength) statLength.textContent = `${result.lengthMeters.toFixed(0)} m (${(result.lengthMeters / 1852).toFixed(2)} NM)`;
     if (statSmoothness) statSmoothness.textContent = `${result.smoothnessDeg.toFixed(1)}°`;
-    if (statTime) statTime.textContent = `${result.computeTimeMs.toFixed(1)} ms`;
+    if (statEnergy) statEnergy.textContent = `${result.energyIndex} (Optimized)`;
     if (statClearance) statClearance.textContent = `${result.minClearanceMeters.toFixed(1)} m`;
     if (statReplans) statReplans.textContent = '0';
 
-    if (autoStartSimulation && result.explored && result.explored.length > 0) {
-      renderer.startExplorationAnimation(result.explored, () => {
-        ship.setPath(result.path, false);
-        isSimRunning = true;
-        if (btnRun) {
-          btnRun.textContent = 'Running...';
-          btnRun.classList.add('active');
-        }
-      });
-    } else {
-      ship.setPath(result.path, false);
-      if (autoStartSimulation) {
+    const mins = Math.floor(result.transitTimeSec / 60);
+    const secs = Math.floor(result.transitTimeSec % 60);
+    if (statETA) statETA.textContent = `${mins}m ${secs}s`;
+
+    if (autoStartSimulation) {
+      if (result.stage1 && result.stage1.path) {
+        renderer.startExplorationAnimation(result.stage1.path, () => {
+          isSimRunning = true;
+          if (btnRun) {
+            btnRun.textContent = 'Running...';
+            btnRun.classList.add('active');
+          }
+        });
+      } else {
         isSimRunning = true;
         if (btnRun) {
           btnRun.textContent = 'Running...';
@@ -184,71 +224,49 @@ window.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    updateSingleBenchmarkRow(planner.name, result);
+    updateBenchmarkTable();
   }
 
-  // Benchmark all 4 algorithms on current map
-  function runFullBenchmark() {
+  // Update Benchmark Comparison Table
+  function updateBenchmarkTable() {
     if (!comparisonTbody) return;
-    logEvent('Starting 4-Algorithm Benchmark comparison...', 'info');
     comparisonTbody.innerHTML = '';
 
-    const algorithms = [
-      { id: 'astar', name: 'A* (8-Connected Grid)' },
-      { id: 'thetastar', name: 'Theta* (Any-Angle)' },
-      { id: 'monkey', name: 'Monkey Search' },
-      { id: 'hybrid', name: 'Hybrid (Theta* + Monkey + Dubins)' }
+    // Run evaluations
+    const s1 = aStarPlanner.plan(grid.start, grid.destination, ship.draft, ship.computeRequiredClearanceMeters());
+    const coarse = threeStagePlanner.extractCoarseWaypoints(s1.path);
+    const s2 = rrtStarPlanner.refine(coarse, ship, aisSystem);
+    const s3 = monkeySearchPlanner.optimize(s2.waypoints, ship, aisSystem, 25);
+    const sFull = threeStagePlanner.lastResult || threeStagePlanner.plan(grid.start, grid.destination, ship, aisSystem);
+
+    const rows = [
+      { name: 'Stage 1: A* Global (Grid Baseline)', res: s1, id: 's1' },
+      { name: 'Stage 2: RRT* Kinematic Refinement', res: s2, id: 's2' },
+      { name: 'Stage 3: Somersault Monkey Search', res: s3, id: 's3' },
+      { name: 'Full 3-Stage Hybrid Architecture (Fig 3.2)', res: sFull, id: 'hybrid' }
     ];
 
-    const results = [];
-
-    for (let i = 0; i < algorithms.length; i++) {
-      const a = algorithms[i];
-      let res;
-      if (a.id === 'astar') {
-        res = aStarPlanner.plan(grid.start, grid.destination, ship.draft, ship.computeRequiredClearanceMeters());
-      } else if (a.id === 'thetastar') {
-        res = thetaStarPlanner.plan(grid.start, grid.destination, ship.draft, ship.computeRequiredClearanceMeters());
-      } else if (a.id === 'monkey') {
-        const seed = thetaStarPlanner.plan(grid.start, grid.destination, ship.draft, ship.computeRequiredClearanceMeters());
-        res = seed.success
-          ? monkeySearchPlanner.optimize(seed.waypoints, ship.draft, ship.computeRequiredClearanceMeters(), ship.minTurningRadius, 25)
-          : seed;
-      } else {
-        res = hybridPlanner.plan(grid.start, grid.destination, ship);
-      }
-      results.push({ name: a.name, id: a.id, result: res });
-    }
-
-    results.forEach(item => {
-      const r = item.result;
+    rows.forEach(item => {
+      const r = item.res;
       const tr = document.createElement('tr');
       if (item.id === 'hybrid') tr.className = 'highlight-row';
 
-      const isSuccess = r.success;
+      const isSuccess = r && r.success;
       tr.innerHTML = `
         <td><strong>${item.name}</strong></td>
         <td>${isSuccess ? `${r.computeTimeMs.toFixed(1)} ms` : 'Failed'}</td>
-        <td>${r.nodesExpanded !== undefined ? r.nodesExpanded : '—'}</td>
+        <td>${isSuccess ? (r.nodesExpanded || r.nodesSampled || '16 pop') : '—'}</td>
         <td>${isSuccess ? `${r.lengthMeters.toFixed(0)} m` : '—'}</td>
         <td>${isSuccess ? `${r.smoothnessDeg.toFixed(1)}°` : '—'}</td>
         <td>${isSuccess ? `${r.minClearanceMeters.toFixed(1)} m` : '—'}</td>
-        <td>${isSuccess ? (r.curvatureViolations !== undefined ? r.curvatureViolations : 0) : '—'}</td>
+        <td>${isSuccess ? (r.curvatureViolations || 0) : '—'}</td>
         <td><span class="badge ${isSuccess ? 'badge-success' : 'badge-danger'}">${isSuccess ? 'Feasible' : 'Blocked'}</span></td>
       `;
       comparisonTbody.appendChild(tr);
     });
-
-    logEvent('Benchmark finished: Hybrid achieves lowest curvature violations and smoothest path.', 'success');
   }
 
-  function updateSingleBenchmarkRow(algId, res) {
-    if (comparisonTbody && comparisonTbody.children.length === 0) {
-      runFullBenchmark();
-    }
-  }
-
-  // Interactive Map Painting
+  // Interactive Tools Implementation
   function applyToolAtPixel(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = 500 / rect.width;
@@ -264,12 +282,14 @@ window.addEventListener('DOMContentLoaded', () => {
     if (activeTool === 'set_start') {
       grid.setStart(gx, gy);
       ship.resetToStart(grid.start);
-      computeAndApplyRoute(false);
-      logEvent(`Start point moved to (${gx}, ${gy}).`, 'info');
+      updateDomainDisplay();
+      executeThreeStagePipeline(false);
+      logEvent(`Port M (Departure) relocated to (${gx}, ${gy}).`, 'info');
     } else if (activeTool === 'set_dest') {
       grid.setDestination(gx, gy);
-      computeAndApplyRoute(false);
-      logEvent(`Destination moved to (${gx}, ${gy}).`, 'info');
+      updateDomainDisplay();
+      executeThreeStagePipeline(false);
+      logEvent(`Port N (Destination) relocated to (${gx}, ${gy}).`, 'info');
     } else if (activeTool === 'paint_obstacle') {
       if (!grid.isStart(gx, gy) && !grid.isDestination(gx, gy)) {
         grid.setCell(gx, gy, grid.TYPE_LAND);
@@ -284,9 +304,8 @@ window.addEventListener('DOMContentLoaded', () => {
         grid.computeDistanceField(ship.draft);
       }
     } else if (activeTool === 'add_dynamic') {
-      const angle = Math.random() * Math.PI * 2;
-      obstacleManager.addObstacle(gx, gy, Math.cos(angle) * 0.7, Math.sin(angle) * 0.7, 'vessel', 35);
-      logEvent(`Added dynamic vessel at (${gx}, ${gy}).`, 'info');
+      obstacleManager.addObstacle(gx, gy, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, 'iceberg', 30);
+      logEvent(`Spawned drifting hazard at (${gx}, ${gy}).`, 'info');
     }
   }
 
@@ -322,7 +341,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Tool Selection Buttons
+  // Tool Buttons Setup
   Object.keys(toolButtons).forEach(tool => {
     const btn = toolButtons[tool];
     if (!btn) return;
@@ -334,7 +353,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Ship Parameter Changes
+  // Parameter Change Listeners
   function readShipInputs() {
     if (!shipInputs.length) return;
     ship.updateParameters({
@@ -346,16 +365,15 @@ window.addEventListener('DOMContentLoaded', () => {
       minTurningRadius: shipInputs.minTurningRadius.value
     });
     grid.computeDistanceField(ship.draft);
-    if (statStopping) {
-      statStopping.textContent = `${ship.computeStoppingDistanceMeters().toFixed(0)} m`;
-    }
+    updateDomainDisplay();
   }
 
   Object.values(shipInputs).forEach(input => {
     if (!input) return;
     input.addEventListener('change', () => {
       readShipInputs();
-      logEvent(`Ship parameter updated: ${input.id.replace('param', '')} = ${input.value}`, 'info');
+      logEvent(`Ship domain parameter updated: ${input.id.replace('param', '')} = ${input.value}`, 'info');
+      executeThreeStagePipeline(false);
     });
   });
 
@@ -367,16 +385,16 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Control Buttons
+  // Simulation Action Buttons
   if (btnRun) {
     btnRun.addEventListener('click', () => {
       if (!ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED') {
-        computeAndApplyRoute(true);
+        executeThreeStagePipeline(true);
       } else {
         isSimRunning = true;
         btnRun.textContent = 'Running...';
         btnRun.classList.add('active');
-        logEvent('Simulation resumed.', 'info');
+        logEvent('Simulation resumed along active ASV path.', 'info');
       }
     });
   }
@@ -400,16 +418,22 @@ window.addEventListener('DOMContentLoaded', () => {
         btnRun.classList.remove('active');
       }
       ship.resetToStart(grid.start);
-      spawnInitialDynamicObstacles();
-      computeAndApplyRoute(false);
+      executeThreeStagePipeline(false);
       if (statReplans) statReplans.textContent = '0';
-      logEvent('Simulation reset to start.', 'info');
+      logEvent('ASV reset to Port M (Departure).', 'info');
+    });
+  }
+
+  if (btnRunPipeline) {
+    btnRunPipeline.addEventListener('click', () => {
+      executeThreeStagePipeline(false);
     });
   }
 
   if (btnBenchmark) {
     btnBenchmark.addEventListener('click', () => {
-      runFullBenchmark();
+      updateBenchmarkTable();
+      logEvent('Ran full multi-algorithm benchmark comparison.', 'info');
     });
   }
 
@@ -417,8 +441,8 @@ window.addEventListener('DOMContentLoaded', () => {
     btnRandomMap.addEventListener('click', () => {
       grid.generateRandomMap();
       ship.resetToStart(grid.start);
-      logEvent('Generated random archipelago map.', 'info');
-      computeAndApplyRoute(false);
+      logEvent('Generated random archipelago map with navigational channels.', 'info');
+      executeThreeStagePipeline(false);
     });
   }
 
@@ -427,65 +451,63 @@ window.addEventListener('DOMContentLoaded', () => {
       grid.init();
       grid.computeDistanceField(ship.draft);
       ship.resetToStart(grid.start);
-      logEvent('Cleared all static obstacles.', 'info');
-      computeAndApplyRoute(false);
+      logEvent('Cleared all static chart obstacles.', 'info');
+      executeThreeStagePipeline(false);
     });
   }
 
-  if (btnAddDynamic) {
-    btnAddDynamic.addEventListener('click', () => {
-      obstacleManager.addRandomObstacle();
-      logEvent('Spawned random dynamic maritime hazard.', 'info');
-    });
+  function handleSpawnAIS() {
+    const v = aisSystem.addRandomVessel();
+    if (v) {
+      logEvent(`AIS Broadcast Registered: ${v.name} (MMSI: ${v.mmsi}) SOG: ${v.sog.toFixed(1)}kn COG: ${v.cog.toFixed(0)}°.`, 'info');
+      updateAISTrafficTable();
+    }
   }
 
-  if (mapPresetSelect) {
-    mapPresetSelect.addEventListener('change', () => {
-      const val = mapPresetSelect.value;
-      grid.loadPreset(val);
-      ship.resetToStart(grid.start);
-      logEvent(`Loaded scenario preset: ${val.toUpperCase()}`, 'info');
-      computeAndApplyRoute(false);
-    });
-  }
-
-  if (algSelect) {
-    algSelect.addEventListener('change', () => {
-      logEvent(`Algorithm switched to: ${algSelect.options[algSelect.selectedIndex].text}`, 'info');
-      computeAndApplyRoute(false);
-    });
-  }
+  if (btnAddAIS) btnAddAIS.addEventListener('click', handleSpawnAIS);
+  if (btnSpawnAIS) btnSpawnAIS.addEventListener('click', handleSpawnAIS);
 
   if (btnClearLog) {
     btnClearLog.addEventListener('click', () => {
       if (eventLogList) eventLogList.innerHTML = '';
-      logEvent('Event log cleared.', 'info');
+      logEvent('Navigation log cleared.', 'info');
     });
   }
 
-  // Initial Route Run on startup
+  // Initial Startup Run
   readShipInputs();
-  computeAndApplyRoute(false);
-  runFullBenchmark();
+  executeThreeStagePipeline(false);
+  updateAISTrafficTable();
+  updateBenchmarkTable();
 
-  // Main Real-Time Animation Loop (requestAnimationFrame)
+  // =========================================================================
+  // Main Real-Time 60 FPS Loop
+  // Dynamic obstacles and AIS vessels update continuously before, during,
+  // and after path planning.
+  // =========================================================================
   function mainLoop(timestamp) {
     const rawDt = (timestamp - lastFrameTime) / 1000.0;
     lastFrameTime = timestamp;
     const dt = Math.min(0.1, rawDt) * simulationSpeed;
 
+    // 1. AIS traffic and dynamic obstacles move continuously
+    aisSystem.update(dt);
+    obstacleManager.update(dt);
+
+    // 2. Periodic AIS table refresh (every 0.5s)
+    if (timestamp - lastAisTableUpdate > 500) {
+      lastAisTableUpdate = timestamp;
+      updateAISTrafficTable();
+    }
+
     if (isSimRunning) {
-      // 1. Update Dynamic Obstacles
-      obstacleManager.update(dt);
+      // 3. Collision risk evaluation & dynamic rerouting
+      obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent);
 
-      // 2. CPA / TCPA Collision Detection & Automatic Replanning
-      const activePlanner = getActivePlanner();
-      obstacleManager.checkAndAvoidCollisions(ship, activePlanner, logEvent);
-
-      // 3. Step Cargo Ship Kinematics
+      // 4. Update ASV kinematics & energy accumulation
       ship.update(dt, grid.cellSizeMeters);
 
-      // 4. Update Live Telemetry
+      // 5. Update Live Telemetry
       if (statSpeed) statSpeed.textContent = `${(ship.speed / 0.514444).toFixed(1)} kn`;
       if (statReplans) statReplans.textContent = `${ship.totalReplans}`;
 
@@ -503,7 +525,7 @@ window.addEventListener('DOMContentLoaded', () => {
         const secs = Math.floor(etaSeconds % 60);
         if (statETA) statETA.textContent = `${mins}m ${secs}s`;
       } else if (ship.state === 'ARRIVED') {
-        if (statETA) statETA.textContent = 'ARRIVED';
+        if (statETA) statETA.textContent = 'PORT N REACHED';
       } else {
         if (statETA) statETA.textContent = '—';
       }
@@ -514,7 +536,7 @@ window.addEventListener('DOMContentLoaded', () => {
           btnRun.textContent = 'Run';
           btnRun.classList.remove('active');
         }
-        logEvent('Destination reached successfully!', 'success');
+        logEvent('Voyage complete: ASV arrived safely at Port N.', 'success');
       }
     }
 
@@ -524,6 +546,5 @@ window.addEventListener('DOMContentLoaded', () => {
     requestAnimationFrame(mainLoop);
   }
 
-  // Launch real-time 60fps loop
   requestAnimationFrame(mainLoop);
 });

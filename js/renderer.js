@@ -4,25 +4,32 @@
  *
  * Implements 500x500 high-DPI canvas graphics:
  * - Bathymetric depth shading (deep sea, navigable fairway, shallow reef, land)
- * - Start/Destination flags with coordinates & range vector
- * - Search wavefront (explored nodes animation)
- * - Path A (original, dashed when replanned) vs Path B (active avoidance)
- * - Scaled cargo ship hull with heading, rudder, wake, swept footprint & safety buffer
- * - Dynamic obstacles with velocity vectors and predicted trajectory tracks
- * - REPLANNING, HOLD & WAIT, and ARRIVAL banners
+ * - Port M (Departure Port) and Port N (Destination Port) markers & range vector
+ * - Stage 1 (A* coarse route), Stage 2 (RRT* kinematic tree & path), Stage 3 (Somersault Monkey final path)
+ * - Ship Domain (SS = L * B * D) dynamic 2D/3D safety envelope
+ * - AIS Vessel traffic with MMSI tags, SOG/COG vectors, and collision status
+ * - Reactive Avoidance Path B & Real-Time Alert Banners
  * - Palette adherence to #FFCED8, #FFDDDD, #FFF4DE, #FFE8C4
  */
 
 class MaritimeRenderer {
-  constructor(canvas, grid, ship, obstacleManager) {
+  constructor(canvas, grid, ship, aisSystem, obstacleManager = null) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.grid = grid;
     this.ship = ship;
+    this.aisSystem = aisSystem;
     this.obstacleManager = obstacleManager;
 
     this.cellSize = 10; // 500px / 50 cells = 10px per cell
-    this.themeMode = 'strict'; // 'strict' (using user's 4 colors) or 'nautical'
+    this.themeMode = 'strict';
+
+    // Layer visibility toggles
+    this.showStage1 = true;      // Stage 1 A* Coarse Route
+    this.showStage2 = true;      // Stage 2 RRT* Kinematic Feasible Route & Tree
+    this.showStage3 = true;      // Stage 3 Somersault Monkey Optimized Route
+    this.showShipDomain = true;   // Ship Domain SS = L * B * D
+    this.showAISTraffic = true;   // AIS Vessels & Broadcast Tags
 
     // Explored nodes animation state
     this.exploredAnimationQueue = [];
@@ -39,13 +46,8 @@ class MaritimeRenderer {
     const dpr = window.devicePixelRatio || 1;
     this.canvas.width = 500 * dpr;
     this.canvas.height = 500 * dpr;
-    this.ctx.scale(dpr, dpr);
     this.canvas.style.width = '500px';
     this.canvas.style.height = '500px';
-  }
-
-  setTheme(theme) {
-    this.themeMode = theme;
   }
 
   setHoverCoord(x, y) {
@@ -65,31 +67,38 @@ class MaritimeRenderer {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, 500, 500);
 
-    // 1. Draw Bathymetric Grid & Static Obstacles
+    // 1. Bathymetric Grid & Static Chart Obstacles
     this.drawBathymetricGrid(ctx);
 
-    // 2. Draw Distance / Straight-Line Vector between Start & Dest
-    this.drawStartDestVector(ctx);
+    // 2. Straight-Line Range Vector between Port M & Port N
+    this.drawPortRangeVector(ctx);
 
-    // 3. Draw Explored Nodes (Frontier wavefront)
+    // 3. Explored Nodes Wavefront (Stage 1 A* animation)
     this.drawExploredNodes(ctx);
 
-    // 4. Draw Planned Routes (Path A & Path B)
-    this.drawPaths(ctx);
+    // 4. Three-Stage Hybrid Pipeline Routes
+    this.drawThreeStageRoutes(ctx);
 
-    // 5. Draw Dynamic Obstacles & Forward Trajectories
-    this.drawDynamicObstacles(ctx);
+    // 5. AIS Marine Traffic (Other Vessels)
+    if (this.showAISTraffic && this.aisSystem) {
+      this.drawAISTraffic(ctx);
+    }
 
-    // 6. Draw Ship Hull, Heading, Rudder, Swept Footprint & Safety Buffer
-    this.drawShip(ctx);
+    // 6. Dynamic Obstacles (if any legacy debris/icebergs)
+    if (this.obstacleManager) {
+      this.drawDynamicObstacles(ctx);
+    }
 
-    // 7. Draw Start & Destination Markers (Flags + Coordinates)
-    this.drawFlags(ctx);
+    // 7. Cargo ASV Ship, Domain (SS = L * B * D), Rudder & Heading
+    this.drawShipAndDomain(ctx);
 
-    // 8. Draw Alert Banners (Replanning, Emergency Stop, Arrived)
+    // 8. Port M (Departure) & Port N (Destination) Markers
+    this.drawPorts(ctx);
+
+    // 9. Alert Banners (Replanning, Collision Alert, Arrived)
     this.drawBanners(ctx);
 
-    // 9. Draw Mouse Hover HUD
+    // 10. Hover Bathymetry / AIS Inspector HUD
     this.drawHoverHUD(ctx);
   }
 
@@ -97,8 +106,6 @@ class MaritimeRenderer {
    * Draws bathymetric sea map with depth contours
    */
   drawBathymetricGrid(ctx) {
-    const isStrict = this.themeMode === 'strict';
-
     for (let y = 0; y < this.grid.rows; y++) {
       for (let x = 0; x < this.grid.cols; x++) {
         const type = this.grid.cells[y][x];
@@ -108,34 +115,30 @@ class MaritimeRenderer {
 
         if (type === this.grid.TYPE_LAND) {
           // Land / Island obstacle
-          ctx.fillStyle = isStrict ? '#7C5865' : '#475569';
+          ctx.fillStyle = '#7C5865';
           ctx.fillRect(px, py, this.cellSize, this.cellSize);
-
-          // Rocky texture highlight
-          ctx.fillStyle = isStrict ? '#FFCED8' : '#64748B';
+          ctx.fillStyle = '#FFCED8';
           ctx.fillRect(px + 1, py + 1, this.cellSize - 2, 2);
         } else if (type === this.grid.TYPE_SHALLOW || depth < this.ship.draft) {
-          // Shallow reef/shoal impassable for current vessel draft
-          ctx.fillStyle = isStrict ? '#FFE8C4' : '#64A5B5';
+          // Shallow reef/shoal impassable for vessel draft D
+          ctx.fillStyle = '#FFE8C4';
           ctx.fillRect(px, py, this.cellSize, this.cellSize);
-
-          // Stipple reef texture
-          ctx.fillStyle = isStrict ? '#E2B888' : '#4E8A98';
+          ctx.fillStyle = '#E2B888';
           ctx.fillRect(px + 3, py + 3, 2, 2);
           ctx.fillRect(px + 7, py + 6, 2, 2);
         } else {
-          // Open Sea / Navigable Fairway
-          ctx.fillStyle = isStrict ? '#FFF4DE' : '#1D3557';
+          // Deep Navigable Sea
+          ctx.fillStyle = '#FFF4DE';
           ctx.fillRect(px, py, this.cellSize, this.cellSize);
         }
       }
     }
 
-    // Grid mesh lines
-    ctx.strokeStyle = isStrict ? 'rgba(215, 185, 175, 0.28)' : 'rgba(255, 255, 255, 0.06)';
+    // Nautical grid coordinate lines
+    ctx.strokeStyle = 'rgba(215, 185, 175, 0.28)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
-    for (let i = 0; i <= 50; i++) {
+    for (let i = 0; i <= 50; i += 5) {
       ctx.moveTo(i * this.cellSize, 0);
       ctx.lineTo(i * this.cellSize, 500);
       ctx.moveTo(0, i * this.cellSize);
@@ -145,9 +148,9 @@ class MaritimeRenderer {
   }
 
   /**
-   * Straight-line distance range vector between Start and Destination
+   * Vector line connecting Port M and Port N
    */
-  drawStartDestVector(ctx) {
+  drawPortRangeVector(ctx) {
     const sx = (this.grid.start.x + 0.5) * this.cellSize;
     const sy = (this.grid.start.y + 0.5) * this.cellSize;
     const dx = (this.grid.destination.x + 0.5) * this.cellSize;
@@ -155,7 +158,7 @@ class MaritimeRenderer {
 
     ctx.save();
     ctx.setLineDash([4, 4]);
-    ctx.strokeStyle = 'rgba(120, 90, 80, 0.4)';
+    ctx.strokeStyle = 'rgba(120, 90, 80, 0.35)';
     ctx.lineWidth = 1.0;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
@@ -163,13 +166,13 @@ class MaritimeRenderer {
     ctx.stroke();
     ctx.restore();
 
-    // Range distance label along mid-line
+    // Range distance label
     const midX = (sx + dx) / 2;
     const midY = (sy + dy) / 2;
     const distInfo = this.grid.getStraightLineDistance();
 
     ctx.save();
-    ctx.fillStyle = 'rgba(255, 244, 222, 0.9)';
+    ctx.fillStyle = 'rgba(255, 244, 222, 0.92)';
     ctx.strokeStyle = '#FFCED8';
     ctx.lineWidth = 1;
     const labelText = `Range: ${distInfo.nauticalMiles.toFixed(2)} NM (${distInfo.km.toFixed(2)} km)`;
@@ -186,17 +189,13 @@ class MaritimeRenderer {
     ctx.restore();
   }
 
-  /**
-   * Draws faint dots of explored nodes (search wavefront)
-   */
   drawExploredNodes(ctx) {
     if (!this.exploredAnimationQueue || this.exploredAnimationQueue.length === 0) return;
 
     if (this.isAnimatingExploration) {
-      // Advance animation batch
       this.animatedExploredIndex = Math.min(
         this.exploredAnimationQueue.length,
-        this.animatedExploredIndex + 25
+        this.animatedExploredIndex + 30
       );
       if (this.animatedExploredIndex >= this.exploredAnimationQueue.length) {
         this.isAnimatingExploration = false;
@@ -205,13 +204,12 @@ class MaritimeRenderer {
     }
 
     const count = this.isAnimatingExploration ? this.animatedExploredIndex : this.exploredAnimationQueue.length;
-    ctx.fillStyle = 'rgba(217, 83, 111, 0.35)'; // faint glowing dot
+    ctx.fillStyle = 'rgba(217, 83, 111, 0.32)';
 
     for (let i = 0; i < count; i++) {
       const node = this.exploredAnimationQueue[i];
       const cx = (node.x + 0.5) * this.cellSize;
       const cy = (node.y + 0.5) * this.cellSize;
-
       ctx.beginPath();
       ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
       ctx.fill();
@@ -219,45 +217,102 @@ class MaritimeRenderer {
   }
 
   /**
-   * Draws Path A (original) and Path B (replan)
+   * Draws the Three-Stage Hybrid Pipeline routes
    */
-  drawPaths(ctx) {
-    // 1. Draw Original Path (Path A)
-    // If ship has replanned, draw Path A as dashed muted line
-    if (this.ship.originalPath && this.ship.originalPath.length > 1) {
+  drawThreeStageRoutes(ctx) {
+    // -------------------------------------------------------------
+    // STAGE 1: A* Global Coarse Waypoint Route (dashed amber/gold)
+    // -------------------------------------------------------------
+    if (this.showStage1 && this.ship.stage1Path && this.ship.stage1Path.length > 1) {
       ctx.save();
-      if (this.ship.hasReplanned) {
-        ctx.setLineDash([5, 5]);
-        ctx.strokeStyle = 'rgba(140, 110, 115, 0.6)';
-        ctx.lineWidth = 2.0;
-      } else {
-        ctx.strokeStyle = '#D9536F'; // bright vivid line
-        ctx.lineWidth = 3.0;
-        ctx.shadowColor = 'rgba(217, 83, 111, 0.4)';
-        ctx.shadowBlur = 6;
-      }
-
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = '#D97706'; // Amber Stage 1
+      ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.moveTo(
-        (this.ship.originalPath[0].x + 0.5) * this.cellSize,
-        (this.ship.originalPath[0].y + 0.5) * this.cellSize
+        (this.ship.stage1Path[0].x + 0.5) * this.cellSize,
+        (this.ship.stage1Path[0].y + 0.5) * this.cellSize
       );
-      for (let i = 1; i < this.ship.originalPath.length; i++) {
+      for (let i = 1; i < this.ship.stage1Path.length; i++) {
         ctx.lineTo(
-          (this.ship.originalPath[i].x + 0.5) * this.cellSize,
-          (this.ship.originalPath[i].y + 0.5) * this.cellSize
+          (this.ship.stage1Path[i].x + 0.5) * this.cellSize,
+          (this.ship.stage1Path[i].y + 0.5) * this.cellSize
+        );
+      }
+      ctx.stroke();
+
+      // Waypoint diamond markers
+      ctx.fillStyle = '#D97706';
+      for (let i = 0; i < this.ship.stage1Path.length; i += 6) {
+        const wx = (this.ship.stage1Path[i].x + 0.5) * this.cellSize;
+        const wy = (this.ship.stage1Path[i].y + 0.5) * this.cellSize;
+        ctx.fillRect(wx - 2, wy - 2, 4, 4);
+      }
+      ctx.restore();
+    }
+
+    // -------------------------------------------------------------
+    // STAGE 2: RRT* Kinematic Feasible Route (cyan/teal)
+    // -------------------------------------------------------------
+    if (this.showStage2 && this.ship.stage2Path && this.ship.stage2Path.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = '#0284C7'; // Light ocean blue / cyan
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.moveTo(
+        (this.ship.stage2Path[0].x + 0.5) * this.cellSize,
+        (this.ship.stage2Path[0].y + 0.5) * this.cellSize
+      );
+      for (let i = 1; i < this.ship.stage2Path.length; i++) {
+        ctx.lineTo(
+          (this.ship.stage2Path[i].x + 0.5) * this.cellSize,
+          (this.ship.stage2Path[i].y + 0.5) * this.cellSize
         );
       }
       ctx.stroke();
       ctx.restore();
     }
 
-    // 2. Draw Replanned Path (Path B) if active
+    // -------------------------------------------------------------
+    // STAGE 3: Somersault Monkey Search Final Route (vivid coral/rose)
+    // -------------------------------------------------------------
+    const finalRoute = this.ship.stage3Path || this.ship.originalPath;
+    if (this.showStage3 && finalRoute && finalRoute.length > 1) {
+      ctx.save();
+      if (this.ship.hasReplanned) {
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = 'rgba(140, 110, 115, 0.6)';
+        ctx.lineWidth = 2.0;
+      } else {
+        ctx.strokeStyle = '#D9536F'; // Vivid Rose Accent
+        ctx.lineWidth = 3.2;
+        ctx.shadowColor = 'rgba(217, 83, 111, 0.45)';
+        ctx.shadowBlur = 8;
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(
+        (finalRoute[0].x + 0.5) * this.cellSize,
+        (finalRoute[0].y + 0.5) * this.cellSize
+      );
+      for (let i = 1; i < finalRoute.length; i++) {
+        ctx.lineTo(
+          (finalRoute[i].x + 0.5) * this.cellSize,
+          (finalRoute[i].y + 0.5) * this.cellSize
+        );
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // -------------------------------------------------------------
+    // PATH B: Active Dynamic Collision Avoidance Route (Emerald Green)
+    // -------------------------------------------------------------
     if (this.ship.hasReplanned && this.ship.replanPath && this.ship.replanPath.length > 1) {
       ctx.save();
-      ctx.strokeStyle = '#2A9D8F'; // distinct bright turquoise / green avoidance path
-      ctx.lineWidth = 3.2;
-      ctx.shadowColor = 'rgba(42, 157, 143, 0.5)';
+      ctx.strokeStyle = '#15803D'; // Vivid Emerald Green
+      ctx.lineWidth = 3.4;
+      ctx.shadowColor = 'rgba(21, 128, 61, 0.5)';
       ctx.shadowBlur = 8;
 
       ctx.beginPath();
@@ -277,17 +332,17 @@ class MaritimeRenderer {
   }
 
   /**
-   * Draws ship hull, heading vector, rudder angle, wake and safety buffer
+   * Draws Cargo Ship and its Ship Domain SS = L * B * D
    */
-  drawShip(ctx) {
+  drawShipAndDomain(ctx) {
     const ship = this.ship;
     const px = (ship.x + 0.5) * this.cellSize;
     const py = (ship.y + 0.5) * this.cellSize;
 
-    // 1. Draw Wake Trail
+    // Wake trail
     if (ship.trail && ship.trail.length > 1) {
       ctx.save();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
       ctx.lineWidth = 2.0;
       ctx.beginPath();
       for (let i = 0; i < ship.trail.length; i++) {
@@ -300,37 +355,50 @@ class MaritimeRenderer {
       ctx.restore();
     }
 
-    // 2. Draw Dynamic Safety Buffer (Capsule / Ellipse around ship)
-    const clearanceMeters = ship.computeRequiredClearanceMeters();
-    const clearanceCells = clearanceMeters / 50.0;
-    const bufferRadiusPx = clearanceCells * this.cellSize;
+    const halfLenPx = ((ship.length / 2.0) / 50.0) * this.cellSize;
+    const halfBmPx = ((ship.beam / 2.0) / 50.0) * this.cellSize;
+    const domainRadiusMeters = ship.domainRadiusMeters;
+    const domainRadiusPx = (domainRadiusMeters / 50.0) * this.cellSize;
 
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(ship.heading);
 
-    // Safety buffer fill & stroke (#FFDDDD and #FFCED8)
-    ctx.fillStyle = 'rgba(255, 221, 221, 0.28)';
-    ctx.strokeStyle = '#FFCED8';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([3, 3]);
+    // -------------------------------------------------------------
+    // SHIP DOMAIN (SS = L * B * D) Envelope
+    // -------------------------------------------------------------
+    if (this.showShipDomain) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(255, 221, 221, 0.32)'; // #FFDDDD domain zone
+      ctx.strokeStyle = '#FFCED8';                 // #FFCED8 domain boundary
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
 
-    const halfLenPx = ((ship.length / 2.0) / 50.0) * this.cellSize;
-    const halfBmPx = ((ship.beam / 2.0) / 50.0) * this.cellSize;
+      ctx.beginPath();
+      ctx.ellipse(
+        halfLenPx * 0.4, 0,
+        halfLenPx * 1.5 + domainRadiusPx * 0.8,
+        halfBmPx + domainRadiusPx,
+        0, 0, Math.PI * 2
+      );
+      ctx.fill();
+      ctx.stroke();
 
-    // Draw safety capsule
-    ctx.beginPath();
-    ctx.ellipse(0, 0, halfLenPx + bufferRadiusPx, halfBmPx + bufferRadiusPx, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+      // Ship Domain Tag
+      ctx.fillStyle = '#5C3D46';
+      ctx.font = 'bold 8px "Inter", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³`, 0, -halfBmPx - domainRadiusPx - 3);
+      ctx.restore();
+    }
 
-    // 3. Draw Swept Hull Footprint (Oriented Bounding Box)
-    ctx.setLineDash([]);
+    // -------------------------------------------------------------
+    // SHIP HULL (Length L, Beam B, Pointed Bow, Bridge, Containers)
+    // -------------------------------------------------------------
     ctx.fillStyle = '#2C1810'; // Deep dark ship hull
     ctx.strokeStyle = '#FFCED8';
     ctx.lineWidth = 1.2;
 
-    // Draw pointed cargo ship hull
     ctx.beginPath();
     ctx.moveTo(halfLenPx * 1.15, 0); // Bow tip
     ctx.lineTo(halfLenPx * 0.8, halfBmPx);
@@ -341,15 +409,15 @@ class MaritimeRenderer {
     ctx.fill();
     ctx.stroke();
 
-    // Cargo container stacks (colorful bays)
+    // Cargo Container Bay
     ctx.fillStyle = '#FFE8C4';
     ctx.fillRect(-halfLenPx * 0.5, -halfBmPx * 0.7, halfLenPx * 0.9, halfBmPx * 1.4);
 
-    // Navigation Bridge / Deckhouse (at stern)
+    // Navigation Bridge
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(-halfLenPx * 0.85, -halfBmPx * 0.5, halfLenPx * 0.25, halfBmPx * 1.0);
 
-    // 4. Rudder angle indicator at stern
+    // Rudder Angle Deflection
     ctx.strokeStyle = '#D9536F';
     ctx.lineWidth = 2.0;
     ctx.beginPath();
@@ -358,33 +426,102 @@ class MaritimeRenderer {
     ctx.lineTo(-halfLenPx - Math.cos(ship.rudderAngle) * rudderLen, -Math.sin(ship.rudderAngle) * rudderLen);
     ctx.stroke();
 
-    // 5. Heading vector pointer (bow arrow)
+    // Heading Vector Arrow
     ctx.strokeStyle = '#2A9D8F';
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = 2.0;
     ctx.beginPath();
     ctx.moveTo(halfLenPx * 1.15, 0);
-    ctx.lineTo(halfLenPx * 1.15 + 20, 0);
+    ctx.lineTo(halfLenPx * 1.15 + 18, 0);
     ctx.stroke();
-
-    // Turning radius arc indicator
-    if (Math.abs(ship.rudderAngle) > 0.05) {
-      const turnRadiusPx = (ship.minTurningRadius / 50.0) * this.cellSize;
-      ctx.strokeStyle = 'rgba(217, 83, 111, 0.45)';
-      ctx.lineWidth = 1.0;
-      ctx.setLineDash([2, 2]);
-      ctx.beginPath();
-      const arcCenterY = ship.rudderAngle > 0 ? turnRadiusPx : -turnRadiusPx;
-      ctx.arc(0, arcCenterY, turnRadiusPx, 0, Math.PI * 2);
-      ctx.stroke();
-    }
 
     ctx.restore();
   }
 
   /**
-   * Draws dynamic obstacles with predicted future trajectories
+   * Draws AIS marine traffic
    */
+  drawAISTraffic(ctx) {
+    const vessels = this.aisSystem.vessels;
+
+    for (let i = 0; i < vessels.length; i++) {
+      const v = vessels[i];
+      const px = (v.x + 0.5) * this.cellSize;
+      const py = (v.y + 0.5) * this.cellSize;
+      const halfLenPx = ((v.length / 2.0) / 50.0) * this.cellSize;
+      const halfBmPx = ((v.beam / 2.0) / 50.0) * this.cellSize;
+
+      // Predicted AIS forward track
+      ctx.save();
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = v.riskLevel === 'COLLISION_ALERT' ? '#DC2626' : 'rgba(224, 90, 109, 0.5)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      for (let t = 2; t <= 18; t += 3) {
+        const pred = v.predictPosition(t);
+        ctx.lineTo((pred.x + 0.5) * this.cellSize, (pred.y + 0.5) * this.cellSize);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // AIS Vessel Hull
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate((v.cog * Math.PI) / 180.0);
+
+      // Color code by risk
+      if (v.riskLevel === 'COLLISION_ALERT') {
+        ctx.fillStyle = '#EF4444';
+        ctx.strokeStyle = '#991B1B';
+      } else if (v.riskLevel === 'WARNING') {
+        ctx.fillStyle = '#F59E0B';
+        ctx.strokeStyle = '#78350F';
+      } else {
+        ctx.fillStyle = '#E05A6D'; // Standard red/coral AIS vessel
+        ctx.strokeStyle = '#2C1810';
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(halfLenPx * 1.2, 0);
+      ctx.lineTo(halfLenPx * 0.7, halfBmPx);
+      ctx.lineTo(-halfLenPx, halfBmPx);
+      ctx.lineTo(-halfLenPx, -halfBmPx);
+      ctx.lineTo(halfLenPx * 0.7, -halfBmPx);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Velocity arrow
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(halfLenPx * 1.8, 0);
+      ctx.stroke();
+
+      ctx.restore();
+
+      // AIS Broadcast Tag Pill (MMSI & SOG)
+      ctx.save();
+      ctx.font = 'bold 8px "Inter", sans-serif';
+      const label = `${v.name.split(' ')[0]} | ${v.sog.toFixed(1)}kn`;
+      const textW = ctx.measureText(label).width;
+      ctx.fillStyle = 'rgba(255, 244, 222, 0.9)';
+      ctx.strokeStyle = '#FFCED8';
+      ctx.lineWidth = 1;
+      ctx.fillRect(px - textW / 2 - 3, py - 18, textW + 6, 12);
+      ctx.strokeRect(px - textW / 2 - 3, py - 18, textW + 6, 12);
+
+      ctx.fillStyle = '#2A1A1E';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, px, py - 12);
+      ctx.restore();
+    }
+  }
+
   drawDynamicObstacles(ctx) {
+    if (!this.obstacleManager || !this.obstacleManager.obstacles) return;
     const obstacles = this.obstacleManager.obstacles;
 
     for (let i = 0; i < obstacles.length; i++) {
@@ -393,54 +530,12 @@ class MaritimeRenderer {
       const py = (obs.y + 0.5) * this.cellSize;
       const rPx = (obs.radiusMeters / 50.0) * this.cellSize;
 
-      // 1. Draw Predicted Trajectory (Forward Lookahead Horizon Track)
-      ctx.save();
-      ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = 'rgba(224, 90, 109, 0.6)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(px, py);
-      for (let t = 1; t <= 15; t += 2) {
-        const pred = obs.predictPosition(t);
-        ctx.lineTo((pred.x + 0.5) * this.cellSize, (pred.y + 0.5) * this.cellSize);
-      }
-      ctx.stroke();
-      ctx.restore();
-
-      // 2. Draw Obstacle Body
       ctx.save();
       ctx.translate(px, py);
-
-      if (obs.type === 'vessel') {
-        // Dynamic ship
-        ctx.rotate(obs.heading);
-        ctx.fillStyle = '#E05A6D'; // red/coral vessel
-        ctx.strokeStyle = '#2C1810';
-        ctx.lineWidth = 1.2;
-
-        ctx.beginPath();
-        ctx.moveTo(rPx * 1.2, 0);
-        ctx.lineTo(rPx * 0.7, rPx * 0.6);
-        ctx.lineTo(-rPx * 0.9, rPx * 0.6);
-        ctx.lineTo(-rPx * 0.9, -rPx * 0.6);
-        ctx.lineTo(rPx * 0.7, -rPx * 0.6);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-
-        // Velocity vector arrow
-        ctx.strokeStyle = '#FFFFFF';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.lineTo(rPx * 1.8, 0);
-        ctx.stroke();
-      } else if (obs.type === 'iceberg') {
-        // Jagged drifting iceberg
+      if (obs.type === 'iceberg') {
         ctx.fillStyle = '#E8F4F8';
         ctx.strokeStyle = '#64A5B5';
         ctx.lineWidth = 1.5;
-
         ctx.beginPath();
         ctx.moveTo(0, -rPx);
         ctx.lineTo(rPx * 0.9, -rPx * 0.4);
@@ -450,116 +545,100 @@ class MaritimeRenderer {
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-      } else {
-        // Drifting cargo container / debris
+      } else if (obs.type === 'debris') {
         ctx.fillStyle = '#F4A261';
         ctx.strokeStyle = '#2C1810';
-        ctx.lineWidth = 1.0;
         ctx.fillRect(-rPx * 0.7, -rPx * 0.4, rPx * 1.4, rPx * 0.8);
         ctx.strokeRect(-rPx * 0.7, -rPx * 0.4, rPx * 1.4, rPx * 0.8);
       }
-
-      // Safety boundary circle
-      ctx.strokeStyle = 'rgba(224, 90, 109, 0.4)';
-      ctx.lineWidth = 1.0;
-      ctx.beginPath();
-      ctx.arc(0, 0, rPx, 0, Math.PI * 2);
-      ctx.stroke();
-
       ctx.restore();
     }
   }
 
   /**
-   * Draws START (green flag) and DESTINATION (red flag) with coordinate tags
+   * Draws Port M (Departure) and Port N (Destination)
    */
-  drawFlags(ctx) {
+  drawPorts(ctx) {
     const sx = (this.grid.start.x + 0.5) * this.cellSize;
     const sy = (this.grid.start.y + 0.5) * this.cellSize;
     const dx = (this.grid.destination.x + 0.5) * this.cellSize;
     const dy = (this.grid.destination.y + 0.5) * this.cellSize;
 
-    // START (Green Flag)
-    this.drawFlagItem(ctx, sx, sy, '#2E7D32', `START (${this.grid.start.x}, ${this.grid.start.y})`);
+    // Port M: Departure Port (Green Harbor Quay)
+    this.drawPortMarker(ctx, sx, sy, '#2E7D32', 'PORT M (Departure)', `(${this.grid.start.x}, ${this.grid.start.y})`);
 
-    // DESTINATION (Red Flag)
-    this.drawFlagItem(ctx, dx, dy, '#C62828', `DEST (${this.grid.destination.x}, ${this.grid.destination.y})`);
+    // Port N: Destination Port (Red Harbor Quay)
+    this.drawPortMarker(ctx, dx, dy, '#C62828', 'PORT N (Destination)', `(${this.grid.destination.x}, ${this.grid.destination.y})`);
   }
 
-  drawFlagItem(ctx, x, y, color, label) {
+  drawPortMarker(ctx, x, y, color, title, coords) {
     ctx.save();
-    // Flag pole
+    // Harbor Pier Structure
+    ctx.fillStyle = '#475569';
+    ctx.fillRect(x - 6, y + 4, 12, 4);
+
+    // Flag Pole
     ctx.strokeStyle = '#2A1A1E';
     ctx.lineWidth = 2.0;
     ctx.beginPath();
     ctx.moveTo(x, y + 6);
-    ctx.lineTo(x, y - 16);
+    ctx.lineTo(x, y - 18);
     ctx.stroke();
 
-    // Flag banner
+    // Port Banner Flag
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.moveTo(x, y - 16);
-    ctx.lineTo(x + 12, y - 11);
+    ctx.moveTo(x, y - 18);
+    ctx.lineTo(x + 14, y - 12);
     ctx.lineTo(x, y - 6);
     ctx.closePath();
     ctx.fill();
 
-    // Base circle
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(x, y + 6, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Coordinate tag pill
+    // Port Label Badge
     ctx.font = 'bold 9px "Inter", sans-serif';
+    const label = `${title} ${coords}`;
     const textW = ctx.measureText(label).width;
+
     ctx.fillStyle = 'rgba(255, 244, 222, 0.95)';
     ctx.strokeStyle = '#FFCED8';
     ctx.lineWidth = 1;
-    ctx.fillRect(x - textW / 2 - 3, y - 28, textW + 6, 13);
-    ctx.strokeRect(x - textW / 2 - 3, y - 28, textW + 6, 13);
+    ctx.fillRect(x - textW / 2 - 4, y - 30, textW + 8, 14);
+    ctx.strokeRect(x - textW / 2 - 4, y - 30, textW + 8, 14);
 
     ctx.fillStyle = '#2A1A1E';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, x, y - 22);
+    ctx.fillText(label, x, y - 23);
     ctx.restore();
   }
 
-  /**
-   * Draws banner overlays (REPLANNING, HOLD & WAIT, SAFE STOP, ARRIVED)
-   */
   drawBanners(ctx) {
-    if (this.obstacleManager.isReplanning) {
-      this.renderBanner(ctx, '⚠️ REPLANNING IN PROGRESS (PATH B ACTIVE)', '#FFDDDD', '#D9536F');
+    if (this.ship.hasReplanned && this.obstacleManager && this.obstacleManager.isReplanning) {
+      this.renderBanner(ctx, '⚠️ DYNAMIC REROUTE ACTIVE: AVOIDING AIS TRAFFIC (PATH B)', '#FFDDDD', '#D9536F');
     } else if (this.ship.state === 'HOLD_WAIT') {
       this.renderBanner(ctx, '⏸ HOLD & WAIT MANOEUVRE (REVERSE THRUST)', '#FFE8C4', '#D97706');
     } else if (this.ship.state === 'EMERGENCY_STOP') {
       this.renderBanner(ctx, '⛔ EMERGENCY SAFE STOP (PASSAGE BLOCKED)', '#FFDDDD', '#B91C1C');
     } else if (this.ship.state === 'ARRIVED') {
-      this.renderBanner(ctx, '🏁 DESTINATION REACHED SAFELY', '#FFF4DE', '#15803D');
+      this.renderBanner(ctx, '🏁 DESTINATION PORT N REACHED SAFELY', '#FFF4DE', '#15803D');
     }
   }
 
   renderBanner(ctx, text, bgColor, textColor) {
     ctx.save();
-    ctx.font = 'bold 12px "Inter", sans-serif';
+    ctx.font = 'bold 11px "Inter", sans-serif';
     const textW = ctx.measureText(text).width;
-    const bannerW = textW + 32;
-    const bannerH = 28;
+    const bannerW = textW + 28;
+    const bannerH = 26;
     const bx = (500 - bannerW) / 2;
-    const by = 16;
+    const by = 14;
 
     ctx.fillStyle = bgColor;
     ctx.strokeStyle = '#FFCED8';
-    ctx.lineWidth = 2;
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.15)';
-    ctx.shadowBlur = 8;
+    ctx.lineWidth = 1.8;
     ctx.fillRect(bx, by, bannerW, bannerH);
     ctx.strokeRect(bx, by, bannerW, bannerH);
 
-    ctx.shadowColor = 'transparent';
     ctx.fillStyle = textColor;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -567,9 +646,6 @@ class MaritimeRenderer {
     ctx.restore();
   }
 
-  /**
-   * Mouse Hover coordinate & bathymetry info HUD
-   */
   drawHoverHUD(ctx) {
     if (!this.hoverCoord) return;
     const { x, y } = this.hoverCoord;
@@ -579,17 +655,17 @@ class MaritimeRenderer {
 
     let typeStr = 'Deep Sea';
     if (type === this.grid.TYPE_LAND) typeStr = 'Land Obstacle';
-    else if (type === this.grid.TYPE_SHALLOW) typeStr = 'Shallow Shoal';
+    else if (type === this.grid.TYPE_SHALLOW) typeStr = 'Shoal Reef';
 
     const text = `Cell [${x}, ${y}] | Depth: ${depth.toFixed(1)}m | Hazard Dist: ${clearance.toFixed(0)}m | ${typeStr}`;
 
     ctx.save();
     ctx.font = '10px "Inter", sans-serif';
-    ctx.fillStyle = 'rgba(42, 26, 30, 0.85)';
-    ctx.fillRect(8, 476, ctx.measureText(text).width + 16, 18);
+    ctx.fillStyle = 'rgba(42, 26, 30, 0.88)';
+    ctx.fillRect(8, 478, ctx.measureText(text).width + 16, 17);
     ctx.fillStyle = '#FFF4DE';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, 16, 485);
+    ctx.fillText(text, 16, 486);
     ctx.restore();
   }
 }

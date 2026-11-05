@@ -1,119 +1,140 @@
-# NavPilot: Real-Time Cargo Ship Path-Planning Simulator
+# NavPilot: Three-Stage Hybrid Cargo-ASV Path-Planning Simulator
 
 [![GitHub Repository](https://img.shields.io/badge/GitHub-AbhyasKathuria%2FNavPilot-181717?style=flat&logo=github)](https://github.com/AbhyasKathuria/NavPilot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Vanilla%20JS)-success.svg)](#)
-[![Canvas](https://img.shields.io/badge/Canvas-500x500%20(60fps)-ff69b4.svg)](#)
+[![Architecture](https://img.shields.io/badge/Architecture-Three--Stage%20Hybrid%20(Fig%203.2)-blueviolet.svg)](#)
+[![AIS Traffic](https://img.shields.io/badge/AIS-Real--Time%20Marine%20Feed-success.svg)](#)
 
-A complete, runnable, real-time cargo ship path-planning simulator built as a single-page web application using pure HTML5, CSS3, and vanilla JavaScript (zero external dependencies). 
+A complete, runnable, real-time cargo ship and Autonomous Surface Vessel (ASV) path-planning simulator built as a single-page web app with HTML5, CSS3, and vanilla JavaScript (zero external dependencies). 
 
-NavPilot plans and animates safe, collision-free, physically feasible trajectories for large commercial cargo vessels across complex 2D bathymetric sea maps featuring static coastlines, shallow reefs, and dynamic obstacles (other ships, drifting icebergs, container debris).
+NavPilot implements the **Three-Stage Hybrid Planning Architecture** (Figure 3.2) combining **A\* Global Search**, **RRT\* Kinematic Refinement**, and **Somersault Monkey Search Multi-Objective Optimization**, integrated with real-time **AIS marine traffic data**, dynamic continuous vessel motion, and the physical **Ship Domain formula: $SS = L \times B \times D$** from Departure Port $M$ to Destination Port $N$.
 
 ---
 
 ## 🎨 Strict Color Palette
 
-NavPilot strictly adheres to the requested color theme:
+The entire user interface, navigation charts, tables, telemetry badges, and safety buffers strictly use the requested color theme:
 - **`#FFCED8`** — Dusty Rose Accent (Headers, Primary Buttons, Action Highlights, Obstacle Accents)
-- **`#FFDDDD`** — Blush / Warning / Safety Buffer (Ship Swept Danger Zones, Alert Banners, Badges)
-- **`#FFF4DE`** — Ivory Sea Base (Deep Navigable Sea, Main Surface, Document Canvas)
+- **`#FFDDDD`** — Blush / Warning / Safety Buffer (Ship Domain $SS$ Envelopes, Dynamic Collision Alerts)
+- **`#FFF4DE`** — Ivory Sea Base (Deep Navigable Sea, Main Application Base, Document Surface)
 - **`#FFE8C4`** — Warm Peach Fairway (Sidebar Panels, Shallow Reef Depths, Table Headers, Control Accents)
 
-High-contrast espresso dark mahogany (`#2C1810`) is utilized for typography and hull contours to ensure WCAG AAA accessibility and crisp readability on maritime bridge screens.
+High-contrast espresso dark mahogany (`#2C1810`) is utilized for typography and hull contours to ensure WCAG AAA accessibility and crisp readability on maritime bridge displays.
+
+---
+
+## 🏗️ Three-Stage Hybrid Planning Architecture (Figure 3.2)
+
+```
+       ┌─────────────────────────────────────────────────────────────┐
+       │                       INPUT DATA                            │
+       │  • Chart & Bathymetric Data                                │
+       │  • Real-Time AIS Marine Traffic Broadcasts                  │
+       │  • Ship Domain (SS = L × B × D)                             │
+       │  • Start / End Ports M, N                                   │
+       └──────────────────────────────┬──────────────────────────────┘
+                                      │
+                                      ▼
+       ┌─────────────────────────────────────────────────────────────┐
+       │         STAGE 1: A* Global Path Search (Grid-Based)         │
+       │  • Discretized 50×50 bathymetric marine environment         │
+       │  • Octile heuristic distance function                       │
+       │  • Avoids shallow shoals (depth < D) and static hazards     │
+       └──────────────────────────────┬──────────────────────────────┘
+                                      │ (coarse waypoint route)
+                                      ▼
+       ┌─────────────────────────────────────────────────────────────┐
+       │     STAGE 2: RRT* Kinematic Refinement (Curvature-Constrained)│
+       │  • Informed corridor sampling seeded from Stage 1           │
+       │  • Non-holonomic minimum turning radius (R ≥ R_min)         │
+       │  • Cost-to-come optimization and neighbor rewiring          │
+       └──────────────────────────────┬──────────────────────────────┘
+                                      │ (kinematically feasible path)
+                                      ▼
+       ┌─────────────────────────────────────────────────────────────┐
+       │  STAGE 3: Somersault Monkey Search Optimisation (Multi-Obj) │
+       │  • Climb Process: fine local perturbation for energy savings│
+       │  • Watch-Jump Process: long-range leaps away from hazards   │
+       │  • Somersault Process: movement toward population barycenter│
+       │  • Multi-Objective Fitness (Energy + Time + Collision Free) │
+       └──────────────────────────────┬──────────────────────────────┘
+                                      │
+                                      ▼
+       ┌─────────────────────────────────────────────────────────────┐
+       │ Optimised, Collision-Free Energy- and Time-Efficient ASV Path│
+       └─────────────────────────────────────────────────────────────┘
+```
+
+### 1. Stage 1: A* Global Path Search (Grid-Based)
+- Finds the initial rough path through the discretized bathymetric grid from **Port $M$** to **Port $N$**.
+- Employs an octile heuristic function to achieve global exploration without expanding the whole map.
+- Strictly validates draft: cells with depth $< D$ are impassable.
+- Outputs the **coarse waypoint route**.
+
+### 2. Stage 2: RRT* Kinematic Refinement (Curvature-Constrained)
+- Refines the coarse waypoint route into a **kinematically feasible path**.
+- Constrains all steering actions by the ship's physical minimum turning radius:
+  $$\kappa \le \kappa_{\text{max}} = \frac{1}{R_{\text{min}}}$$
+- Employs informed corridor sampling around Stage 1's coarse waypoints.
+- Continuously rewires near neighbors to optimize path smoothness and eliminate zig-zag grid artifacts.
+
+### 3. Stage 3: Somersault Monkey Search Optimization (Multi-Objective)
+- Seeded from the kinematically feasible path generated by Stage 2.
+- Bio-inspired metaheuristic maintaining a population of candidate paths ($M=16$ monkeys):
+  - **Climb Process**: Fine-grained local perturbations of intermediate waypoints to minimize rudder movement and hydrodynamic drag.
+  - **Watch-Jump Process**: Large exploratory leaps away from coastlines and oncoming AIS traffic.
+  - **Somersault Process**: Monkeys somersault toward the population's center of gravity (barycenter of elite routes).
+- **Multi-Objective Cost Function**:
+  $$F = w_{\text{time}} \cdot T_{\text{transit}} + w_{\text{energy}} \cdot E_{\text{propulsion}} + w_{\text{safety}} \cdot P_{\text{collision}} + w_{\text{curv}} \cdot P_{\text{curvature}}$$
+  - **Time Efficiency ($T_{\text{transit}}$)**: Minimizes overall voyage distance and transit duration at cruise speed.
+  - **Energy Efficiency ($E_{\text{propulsion}}$)**: Minimizes quadratic rudder deflection energy ($\sum |\Delta \delta_r|^2$) and resistance caused by sharp turning rates ($\dot{\psi}^2$).
+  - **Collision Safety ($P_{\text{collision}}$)**: Maximizes clearance from coastal reefs and dynamic AIS ship domains.
+  - **Curvature Feasibility ($P_{\text{curvature}}$)**: Zero curvature violations guaranteed.
+
+---
+
+## 📡 Live AIS Marine Traffic & Dynamic Rerouting
+
+- **Continuous Dynamic Motion**: Other marine vehicles (container vessels, tankers, bulk carriers, patrol craft) navigate the sea map **continuously before, during, and after path planning**.
+- **Real-Time AIS Data Broadcasts**:
+  - `MMSI` (Maritime Mobile Service Identity, e.g. 563042000)
+  - `Vessel Name` (e.g. *MV PACIFIC PIONEER*, *STENA POLARIS*, *COSCO SHIPPING ASIA*)
+  - `Vessel Type` (Container, Tanker, Bulk Carrier, Patrol Craft)
+  - `SOG` (Speed Over Ground in knots)
+  - `COG` (Course Over Ground in degrees)
+  - `Length` ($L_{\text{obs}}$) and `Beam` ($B_{\text{obs}}$)
+- **CPA & TCPA Collision Detection**:
+  - Continuously projects trajectories over a forward lookahead horizon ($t \in [0, 30\text{s}]$).
+  - Evaluates Closest Point of Approach ($\text{CPA}$) and Time to CPA ($\text{TCPA}$).
+- **Automatic Dynamic Rerouting**:
+  - When an AIS vessel or drifting obstacle breaches the Ship Domain or is projected on an intercept course, NavPilot triggers an instant dynamic reroute.
+  - The 3-Stage Pipeline re-computes an avoidance route from the ship's live $(x, y, \theta)$ to Port $N$.
+  - The previous path becomes dashed (**Path A**), and the new avoidance route (**Path B**) is activated.
+  - If a narrow channel is temporarily obstructed, the vessel performs a **"HOLD & WAIT"** reverse-thrust maneuver until the channel is clear.
+
+---
+
+## 📐 Ship Domain Formula: $SS = L \times B \times D$
+
+In modern Autonomous Surface Vessel navigation, the safety domain is determined by the vessel's primary physical dimensions:
+$$\text{Ship Domain } SS = L \times B \times D$$
+- **Length ($L$)**: Longitudinal dimension ($200\text{ m}$ default).
+- **Beam ($B$)**: Transverse hull breadth ($32\text{ m}$ default).
+- **Draft ($D$)**: Vertical keel depth ($12\text{ m}$ default).
+- **Domain Volumetric Metric**: $SS = 200 \times 32 \times 12 = 76,800\text{ m}^3$.
+- **2D Planar Safety Domain Envelope**:
+  $$\text{Domain Radius} = \frac{B}{2} + 15\text{m} + \left(\frac{\text{Displacement}}{50,000}\right) \times 12\text{m} + \left(\frac{v}{v_{\text{max}}}\right) \times 8\text{m}$$
+  Displayed as a safety capsule around the hull with real-time domain volume annotation.
 
 ---
 
 ## 🚀 Quickstart
 
-1. **Clone or Download**:
-   ```bash
-   git clone https://github.com/AbhyasKathuria/NavPilot.git
-   cd NavPilot
-   ```
-2. **Run Immediately**:
-   - Double-click **`start.bat`** to run in 1-go!
-   - Alternatively, double-click **`index.html`** in any web browser (Chrome, Edge, Firefox, Safari).
-   - Or extract **`NavPilot.zip`** and run `start.bat`.
-   - **No local server, node modules, build tools, or internet connection required.**
-
----
-
-## 🚢 Core Capabilities & Architecture
-
-### 1. Algorithms Implemented & Compared
-
-| Algorithm | Method | Optimality | Smoothness | Turning Radius Violations |
-| :--- | :--- | :--- | :--- | :--- |
-| **A\*** | 8-Connected Grid with Octile Heuristic | Discrete Shortest | Zig-zag (45°/90°) | Frequent |
-| **Theta\*** | Any-Angle Line-of-Sight Shortcuts | Continuous Shortest | High (Straight legs) | At waypoints |
-| **Monkey Search** | Metaheuristic Optimization | Clearance-Maximizing | Very High | Penalized in fitness |
-| **Hybrid (Recommended)** | Theta\* $\to$ Monkey $\to$ Dubins Arc Smoothing | Near-Optimal | Continuous ($C^1$) | **Zero (Guaranteed)** |
-
-#### 1. A* (8-Connected Grid Baseline)
-- Discretized 50x50 cell grid with orthogonal ($1.0$) and diagonal ($\sqrt{2}$) step costs.
-- Octile heuristic: $h(\Delta x, \Delta y) = (\Delta x + \Delta y) + (\sqrt{2} - 2)\min(\Delta x, \Delta y)$.
-- Corner-cutting prevention prevents cutting across diagonal obstacle pinch points.
-- Records all explored nodes to animate search wavefront progression.
-
-#### 2. Theta* (Any-Angle Path Planning)
-- Extends A* by evaluating Line-of-Sight (LOS) back to the parent of the current node.
-- If $LOS(parent(s), s')$ is clear, updates $parent(s') = parent(s)$ directly, skipping unnecessary intermediate grid vertices.
-- Employs continuous swept capsule raycasting considering ship beam and safety buffers.
-
-#### 3. Monkey Search (Metaheuristic Route Optimizer)
-- Seeded from candidate paths generated by Theta*.
-- Maintains a population of candidate waypoint paths ($M=16$ monkeys).
-- Executes three bio-inspired optimization processes:
-  1. **Climb Process**: Fine-grained local perturbation of intermediate waypoints ($\Delta \in [-\epsilon, \epsilon]^2$).
-  2. **Watch-Jump Process**: Monkeys observe from high vantage points and make long-range leaps along distance-field gradients away from coastlines and hazards.
-  3. **Somersault Process**: Non-elite monkeys somersault toward the population's center of gravity (barycenter of elite routes) to accelerate convergence.
-- **Multi-Objective Fitness Function**:
-  $$\text{Fitness} = w_1 \cdot \text{Length} + w_2 \cdot \sum |\Delta \theta| + w_3 \cdot \sum \frac{1}{d_{\text{hazard}} + 1.0} + w_4 \cdot \text{Violations}$$
-
-#### 4. Hybrid Pipeline (Recommended)
-- **Step 1**: Theta* finds the shortest any-angle initial corridor.
-- **Step 2**: Monkey Search refines waypoints to maximize clearance from hazardous coasts and eliminate awkward approach angles.
-- **Step 3**: Curvature Smoothing inserts Dubins circular fillet arcs of radius $R \ge R_{min}$ at all turn junctions, enforcing $\kappa(s) \le 1 / R_{min}$ and verifying swept hull safety.
-
----
-
-## ⚓ Ship Hydrodynamics & Physical Constraints
-
-Unlike conventional point-particle pathfinders, NavPilot treats the cargo vessel as a massive physical body with non-holonomic kinematics:
-
-- **Dimensions & Footprint**:
-  - Length ($L$), Beam ($B$), Draft ($T$), Displacement ($M$).
-  - Evaluated via Oriented Bounding Box (OBB) with pointed bow and rudder kinematics.
-- **Obstacle Inflation & Clearance Margin**:
-  $$\text{Clearance} = \frac{B}{2} + S_{\text{base}} + \left(\frac{\text{Displacement}}{50000}\right) \times 12\text{m} + \left(\frac{v}{v_{\text{max}}}\right) \times 8\text{m}$$
-- **Bathymetric Draft Check**:
-  - Grid cells have realistic depths: Deep Sea ($28\text{ m}$), Shallow Shoals ($8\text{ m}$), Land ($0\text{ m}$).
-  - Any cell where $\text{depth} < T_{\text{draft}}$ is strictly impassable.
-- **Stopping Distance & Momentum**:
-  $$d_{\text{stop}} = \frac{M \cdot v^2}{2 \cdot F_{\text{reverse}}}$$
-  - A 50,000t vessel travelling at 18 knots cannot stop instantaneously: $d_{\text{stop}}$ is calculated dynamically and added to the forward collision buffer.
-- **Turning Radius & Rate of Turn (ROT)**:
-  - Minimum turning radius $R_{\text{min}} = 400\text{ m}$ limits path curvature $\kappa \le 1/R_{\text{min}}$.
-  - Turn rate scales inversely with displacement inertia: $\dot{\psi}_{\text{max}} = \frac{v}{R_{\text{min}}} \cdot \left(\frac{50000}{M}\right)^{0.35}$.
-
----
-
-## 🚨 Dynamic Obstacles & Collision Avoidance (CPA / TCPA)
-
-- **Dynamic Obstacle Types**:
-  - Container Ships & Patrol Vessels (steady course and speed)
-  - Drifting Icebergs (jagged geometry, slow ocean drift)
-  - Drifting Lost Shipping Containers (bobbing surface hazards)
-- **Forward Trajectory Prediction**:
-  - Dynamic obstacles project their positions $P_{\text{obs}}(t) = P_{\text{obs}}(0) + \vec{v}_{\text{obs}} \cdot t$ over a lookahead horizon $T_{\text{horizon}} = \max(15\text{s}, t_{\text{stop}} + 8\text{s})$.
-- **Closest Point of Approach (CPA) & Time to CPA (TCPA)**:
-  - Predicts distance $d(t) = \|P_{\text{ship}}(t) - P_{\text{obs}}(t)\|$.
-  - Computes $\text{TCPA} = \text{argmin}_t d(t)$ and $\text{CPA} = d(\text{TCPA})$.
-- **Reactive Multi-Stage Avoidance**:
-  1. **Replanning Trigger**: If $\text{CPA} < \text{Safety Buffer}$ within the horizon, replanning is invoked from the ship's current position and heading.
-  2. **Path A vs. Path B**: Original route (Path A) is rendered as a dashed line; the newly computed avoidance route (Path B) is displayed in vivid green.
-  3. **Hold-and-Wait Manoeuvre**: If a narrow channel is temporarily blocked by a crossing vessel, the cargo ship cuts engine power and applies reverse thrusters until the hazard passes.
-  4. **Emergency Safe Stop**: If no navigable alternative exists, the ship performs an emergency stop and raises an alarm.
+1. **Launch in 1 Click**:
+   - Double-click **`start.bat`** to run NavPilot immediately in your default browser.
+   - Alternatively, double-click **`index.html`** or extract **`NavPilot.zip`**.
+   - Zero installation, no Node.js/Python server, no npm dependencies required.
 
 ---
 
@@ -122,51 +143,42 @@ Unlike conventional point-particle pathfinders, NavPilot treats the cargo vessel
 ```
 NavPilot/
 ├── start.bat           # 1-click launcher for Windows
-├── index.html          # Main HTML5 single-page application interface
+├── index.html          # Single-page interface with 3-stage UI, AIS table & telemetry
 ├── style.css           # Strict 4-color palette CSS stylesheet & bridge theme
 ├── README.md           # Technical documentation and operational guide
-├── NavPilot.zip        # Offline distribution archive
+├── NavPilot.zip        # Offline distribution package
 └── js/
-    ├── grid.js         # 50x50 bathymetric grid, Euclidean Distance Transform (EDT), LOS
-    ├── ship.js         # Cargo ship kinematics, OBB swept footprint, stopping distance
-    ├── astar.js        # 8-connected grid A* pathfinder (baseline)
-    ├── thetastar.js    # Any-angle Theta* planner with line-of-sight checks
-    ├── monkeysearch.js # Monkey Search metaheuristic (climb, watch-jump, somersault)
-    ├── curvature.js    # Curvature smoother (Dubins fillets) & Hybrid pipeline
-    ├── dynamic.js      # Dynamic obstacles, CPA/TCPA prediction, replanning engine
-    ├── renderer.js     # 500x500 high-DPI canvas renderer with animations and HUD
-    └── main.js         # Event orchestration, telemetry bus, and benchmark runner
+    ├── grid.js         # 50×50 bathymetric grid, Euclidean Distance Transform, Port M & N
+    ├── ship.js         # Ship Domain SS = L * B * D, ASV hydrodynamics, stopping distance
+    ├── ais.js          # Live AIS data broadcasting, vessel simulation, CPA/TCPA
+    ├── astar.js        # Stage 1: A* Global Path Search (coarse waypoint route)
+    ├── rrtstar.js      # Stage 2: RRT* Kinematic Refinement (curvature-constrained)
+    ├── monkeysearch.js # Stage 3: Somersault Monkey Search (multi-objective SMSO)
+    ├── curvature.js    # Dubins arc fillet rounding utilities
+    ├── pipeline.js     # Three-Stage Hybrid Planning Pipeline orchestrator (Fig 3.2)
+    ├── dynamic.js      # Dynamic hazard manager and reactive collision rerouting
+    ├── renderer.js     # 500×500 high-DPI canvas renderer with multi-stage layer toggles
+    └── main.js         # Application bus, telemetry updater, and benchmark runner
 ```
-
----
-
-## 📊 Parameters Reference
-
-| Parameter | Default | Range | Unit | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| **Length ($L$)** | `200` | 50 – 450 | meters | Overall vessel length from bow to stern |
-| **Beam ($B$)** | `32` | 10 – 70 | meters | Maximum breadth of the hull |
-| **Draft ($T$)** | `12` | 4 – 25 | meters | Vertical distance from waterline to keel |
-| **Displacement** | `50,000` | 5,000 – 250,000 | metric tonnes | Total ship mass and water displacement |
-| **Max Speed** | `18` | 6 – 30 | knots | Maximum forward cruising speed |
-| **Min Turning Radius**| `400`| 150 – 1000 | meters | Minimum tactical turning circle radius |
-| **Grid Cell Scale** | `50` | Fixed | meters/cell | $50 \times 50$ cells = $2500\text{ m} \times 2500\text{ m}$ ($1.35\text{ NM}$) |
 
 ---
 
 ## 🎮 Interactive Controls
 
-- **Set Start (🚩)**: Click anywhere on navigable sea to set start coordinates.
-- **Set Destination (🎯)**: Click anywhere on navigable sea to set goal coordinates.
-- **Add / Remove Land (⛰ / 🌊)**: Click and drag on the map to paint or erase landmasses.
-- **Add Shoal (🏖)**: Paint shallow underwater reefs ($8\text{m}$ depth).
-- **Add Dynamic Obstacle (🚢)**: Spawn moving vessels, icebergs, or container debris.
-- **Benchmark All 4**: Runs A*, Theta*, Monkey Search, and Hybrid simultaneously and displays a side-by-side performance comparison.
-- **Presets**: Load "Archipelago", "Singapore Strait", "Iceberg Alley", or "Canal Approach".
+- **Run 3-Stage Pipeline (⚡)**: Computes Stage 1 A* $\to$ Stage 2 RRT* $\to$ Stage 3 Somersault Monkey Search from Port M to Port N.
+- **Layer Checkboxes**:
+  - `[x] Stage 1 (A*)`: Toggles dashed amber coarse waypoint route.
+  - `[x] Stage 2 (RRT*)`: Toggles cyan curvature-constrained kinematic route & tree.
+  - `[x] Stage 3 (Monkey)`: Toggles vivid coral final multi-objective ASV path.
+  - `[x] Ship Domain (SS)`: Toggles $SS = L \times B \times D$ dynamic safety envelope.
+  - `[x] AIS Marine Traffic`: Toggles live other-vessel AIS broadcast labels.
+- **Ports**: Click **🚩 Set Port M** (Departure) or **🎯 Set Port N** (Destination) to reposition terminals.
+- **Spawn AIS Vessel (🚢)**: Injects active commercial traffic with unique MMSI, SOG, and COG into the marine environment.
+- **Benchmark (📊)**: Compares Stage 1 A*, Stage 2 RRT*, Stage 3 SMSO, and the Full 3-Stage Hybrid Pipeline side-by-side.
 
 ---
 
 ## 📜 License & Credits
 
-Developed by **Abhyas Kathuria**. Open-sourced under the MIT License.
+Developed by **Abhyas Kathuria**. Open-sourced under the MIT License.  
 Repository: [https://github.com/AbhyasKathuria/NavPilot](https://github.com/AbhyasKathuria/NavPilot)
