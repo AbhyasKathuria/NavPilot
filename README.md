@@ -131,10 +131,30 @@ $$\text{Ship Domain } SS = L \times B \times D$$
 
 ## 🚀 Quickstart
 
-1. **Launch in 1 Click**:
-   - Double-click **`start.bat`** to run NavPilot immediately in your default browser.
-   - Alternatively, double-click **`index.html`** or extract **`NavPilot.zip`**.
-   - Zero installation, no Node.js/Python server, no npm dependencies required.
+### Option 1: Web Application (Single-Page Browser Simulator)
+- **1-Click Launch**: Double-click **`start.bat`** to open NavPilot instantly in your default web browser.
+- **Manual Launch**: Double-click **`index.html`** or extract and open from **`NavPilot.zip`**.
+- *Zero installation required* — runs offline with pure HTML5, CSS3, and vanilla JavaScript!
+
+### Option 2: Python Architecture & Benchmark Suite
+- **1-Click Launch**: Double-click **`run_python.bat`** on Windows.
+- **CLI Execution**:
+  ```bash
+  # Install dependencies (numpy & matplotlib)
+  pip install -r python/requirements.txt
+
+  # Run full Three-Stage Hybrid Pipeline & Benchmark
+  python run_simulation.py --benchmark
+
+  # Interactive visualization with custom preset
+  python run_simulation.py --preset singapore --iterations 25 --show
+  ```
+- **CLI Options**:
+  - `--preset`: Choose maritime chart (`archipelago`, `singapore`, `ice_alley`, `canal`).
+  - `--benchmark`: Runs performance benchmark across all 4 algorithms.
+  - `--iterations`: Number of iterations for Somersault Monkey Search (default: 20).
+  - `--show`: Displays interactive matplotlib visualization window.
+  - `--save`: Destination file for the high-res plot (default: `navpilot_simulation.png`).
 
 ---
 
@@ -142,23 +162,38 @@ $$\text{Ship Domain } SS = L \times B \times D$$
 
 ```
 NavPilot/
-├── start.bat           # 1-click launcher for Windows
-├── index.html          # Single-page interface with 3-stage UI, AIS table & telemetry
-├── style.css           # Strict 4-color palette CSS stylesheet & bridge theme
-├── README.md           # Technical documentation and operational guide
-├── NavPilot.zip        # Offline distribution package
-└── js/
-    ├── grid.js         # 50×50 bathymetric grid, Euclidean Distance Transform, Port M & N
-    ├── ship.js         # Ship Domain SS = L * B * D, ASV hydrodynamics, stopping distance
-    ├── ais.js          # Live AIS data broadcasting, vessel simulation, CPA/TCPA
-    ├── astar.js        # Stage 1: A* Global Path Search (coarse waypoint route)
-    ├── rrtstar.js      # Stage 2: RRT* Kinematic Refinement (curvature-constrained)
-    ├── monkeysearch.js # Stage 3: Somersault Monkey Search (multi-objective SMSO)
-    ├── curvature.js    # Dubins arc fillet rounding utilities
-    ├── pipeline.js     # Three-Stage Hybrid Planning Pipeline orchestrator (Fig 3.2)
-    ├── dynamic.js      # Dynamic hazard manager and reactive collision rerouting
-    ├── renderer.js     # 500×500 high-DPI canvas renderer with multi-stage layer toggles
-    └── main.js         # Application bus, telemetry updater, and benchmark runner
+├── start.bat                   # 1-click Windows launcher for Web Simulator
+├── run_python.bat              # 1-click Windows launcher for Python Simulation
+├── run_simulation.py           # Python simulation & benchmark entry point
+├── index.html                  # Single-page interface with 3-stage UI, AIS table & telemetry
+├── style.css                   # Strict 4-color palette CSS stylesheet & bridge theme
+├── README.md                   # Technical documentation and operational guide
+├── NavPilot.zip                # Offline distribution package
+├── navpilot_simulation.png     # High-resolution simulation plot output
+├── js/                         # JavaScript Implementation (Browser Simulator)
+│   ├── grid.js                 # 50×50 bathymetric grid, EDT, Port M & N
+│   ├── ship.js                 # Ship Domain SS = L * B * D, ASV hydrodynamics, stopping distance
+│   ├── ais.js                  # Live AIS data broadcasting, vessel simulation, CPA/TCPA
+│   ├── astar.js                # Stage 1: A* Global Path Search (coarse waypoint route)
+│   ├── rrtstar.js              # Stage 2: RRT* Kinematic Refinement (curvature-constrained)
+│   ├── monkeysearch.js         # Stage 3: Somersault Monkey Search (multi-objective SMSO)
+│   ├── curvature.js            # Dubins arc fillet rounding utilities
+│   ├── pipeline.js             # Three-Stage Hybrid Planning Pipeline orchestrator (Fig 3.2)
+│   ├── dynamic.js              # Dynamic hazard manager and reactive collision rerouting
+│   ├── renderer.js             # 500×500 high-DPI canvas renderer with multi-stage layer toggles
+│   └── main.js                 # Application bus, telemetry updater, and benchmark runner
+└── python/                     # Python Implementation (Same 3-Stage Architecture)
+    ├── requirements.txt        # Python dependencies (numpy, matplotlib)
+    ├── grid.py                 # Bathymetric grid with EDT and presets
+    ├── ship.py                 # CargoASV model and Ship Domain SS = L * B * D
+    ├── ais.py                  # Live AIS traffic broadcasting & CPA/TCPA checks
+    ├── astar.py                # Stage 1: A* Global Path Search
+    ├── rrtstar.py              # Stage 2: Curvature-constrained RRT* Refinement
+    ├── monkeysearch.py         # Stage 3: Somersault Monkey Search Optimization
+    ├── curvature.py            # Dubins fillet arc smoothing
+    ├── pipeline.py             # ThreeStageHybridPlanner orchestrator
+    ├── visualizer.py           # Matplotlib visualization engine
+    └── main.py                 # Python benchmark & CLI simulation runner
 ```
 
 ---
