@@ -188,13 +188,13 @@ class CargoShip {
     this.enginePower = -0.7;
   }
 
-  update(dt, cellSizeMeters = 50.0) {
-    if (!this.activePath || this.state === 'IDLE' || this.state === 'ARRIVED') {
+  update(dt, grid = null, cellSizeMeters = 50.0) {
+    if (!this.activePath || this.activePath.length < 2 || this.state === 'IDLE' || this.state === 'ARRIVED') {
       return;
     }
 
-    const accelRate = 0.35 * Math.pow(50000.0 / this.displacement, 0.4);
-    const decelRate = 0.55 * Math.pow(50000.0 / this.displacement, 0.4);
+    const accelRate = 0.5 * Math.pow(50000.0 / this.displacement, 0.4);
+    const decelRate = 0.8 * Math.pow(50000.0 / this.displacement, 0.4);
 
     if (this.speed < this.targetSpeed) {
       this.speed = Math.min(this.targetSpeed, this.speed + accelRate * dt);
@@ -202,7 +202,72 @@ class CargoShip {
       this.speed = Math.max(this.targetSpeed, this.speed - decelRate * dt);
     }
 
-    // Accumulate energy consumption: baseline propulsion + drag from rudder deflection
+    if (this.state === 'HOLD_WAIT' || this.state === 'EMERGENCY_STOP') {
+      if (this.speed <= 0.05) this.speed = 0.0;
+      return;
+    }
+
+    // Distance to advance along the collision-free path this frame
+    const moveDistCells = (this.speed * dt) / cellSizeMeters;
+    if (moveDistCells <= 0) return;
+
+    let remainingMove = moveDistCells;
+
+    while (remainingMove > 0 && this.pathIndex < this.activePath.length - 1) {
+      const pCurrent = this.activePath[this.pathIndex];
+      const pNext = this.activePath[this.pathIndex + 1];
+
+      const segDx = pNext.x - this.x;
+      const segDy = pNext.y - this.y;
+      const distToNext = Math.hypot(segDx, segDy);
+
+      if (distToNext <= 0.001) {
+        this.pathIndex++;
+        continue;
+      }
+
+      if (remainingMove >= distToNext) {
+        this.x = pNext.x;
+        this.y = pNext.y;
+        remainingMove -= distToNext;
+        this.pathIndex++;
+      } else {
+        const ratio = remainingMove / distToNext;
+        this.x += segDx * ratio;
+        this.y += segDy * ratio;
+        remainingMove = 0;
+      }
+    }
+
+    // Smooth heading alignment along the path tangent
+    if (this.pathIndex < this.activePath.length - 1) {
+      const pCurr = this.activePath[this.pathIndex];
+      const pNext = this.activePath[Math.min(this.activePath.length - 1, this.pathIndex + 1)];
+      const targetHeading = Math.atan2(pNext.y - pCurr.y, pNext.x - pCurr.x);
+
+      let diff = targetHeading - this.heading;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+
+      const maxTurn = Math.max(0.15, (this.speed / this.minTurningRadius) * (cellSizeMeters / 50.0) * 12.0) * dt;
+      const appliedTurn = Math.max(-maxTurn, Math.min(maxTurn, diff));
+      this.heading += appliedTurn;
+      this.rudderAngle = Math.max(-0.6, Math.min(0.6, diff * 1.5));
+    }
+
+    // HARD OBSTACLE SAFETY GUARD: Absolute zero overlap with land or shallow shoals
+    if (grid) {
+      const gx = Math.round(this.x);
+      const gy = Math.round(this.y);
+      if (!grid.inBounds(gx, gy) || grid.cells[gy][gx] === grid.TYPE_LAND || grid.depths[gy][gx] < this.draft) {
+        // Clamp to nearest verified collision-free waypoint
+        const safePt = this.activePath[Math.min(this.pathIndex, this.activePath.length - 1)];
+        this.x = safePt.x;
+        this.y = safePt.y;
+      }
+    }
+
+    // Energy tracking
     const thrustEnergy = (this.speed / this.maxSpeedMs) * 100.0;
     const rudderDragEnergy = Math.abs(this.rudderAngle) * 60.0;
     this.totalEnergyConsumed += (thrustEnergy + rudderDragEnergy) * dt;
@@ -212,48 +277,12 @@ class CargoShip {
       this.trail.shift();
     }
 
-    if (this.state === 'HOLD_WAIT' || this.state === 'EMERGENCY_STOP') {
-      if (this.speed <= 0.05) this.speed = 0.0;
-      return;
-    }
-
-    if (this.pathIndex >= this.activePath.length) {
-      this.state = 'ARRIVED';
-      this.speed = 0.0;
-      return;
-    }
-
-    const target = this.activePath[this.pathIndex];
-    const dx = target.x - this.x;
-    const dy = target.y - this.y;
-    const distToTargetCells = Math.hypot(dx, dy);
-
-    const waypointToleranceCells = Math.max(0.4, (this.speed / 10.0));
-    if (distToTargetCells <= waypointToleranceCells) {
-      this.pathIndex++;
-      if (this.pathIndex >= this.activePath.length) {
+    if (this.pathIndex >= this.activePath.length - 1) {
+      const finalDest = this.activePath[this.activePath.length - 1];
+      if (Math.hypot(finalDest.x - this.x, finalDest.y - this.y) < 0.25) {
         this.state = 'ARRIVED';
         this.speed = 0.0;
-        return;
       }
     }
-
-    const desiredHeading = Math.atan2(dy, dx);
-    let headingDiff = desiredHeading - this.heading;
-
-    while (headingDiff > Math.PI) headingDiff -= Math.PI * 2;
-    while (headingDiff < -Math.PI) headingDiff += Math.PI * 2;
-
-    const maxHeadingDelta = this.maxTurnRate * dt;
-    const turnStep = Math.max(-maxHeadingDelta, Math.min(maxHeadingDelta, headingDiff));
-    this.heading += turnStep;
-
-    this.rudderAngle = Math.max(-0.6, Math.min(0.6, headingDiff * 1.5));
-
-    const moveDistMeters = this.speed * dt;
-    const moveDistCells = moveDistMeters / cellSizeMeters;
-
-    this.x += Math.cos(this.heading) * moveDistCells;
-    this.y += Math.sin(this.heading) * moveDistCells;
   }
 }

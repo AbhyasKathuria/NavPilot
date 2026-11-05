@@ -116,7 +116,7 @@ class CargoASV:
         else:
             self.replan_path = path_points
             self.active_path = path_points
-            self.has_replanned = true
+            self.has_replanned = True
             self.total_replans += 1
             self.path_index = 0
         self.target_speed = self.max_speed_ms
@@ -130,12 +130,12 @@ class CargoASV:
         self.state = "EMERGENCY_STOP"
         self.target_speed = 0.0
 
-    def update(self, dt: float, cell_size_meters: float = 50.0):
-        if not self.active_path or self.state in ("IDLE", "ARRIVED"):
+    def update(self, dt: float, grid=None, cell_size_meters: float = 50.0):
+        if not self.active_path or len(self.active_path) < 2 or self.state in ("IDLE", "ARRIVED"):
             return
 
-        accel_rate = 0.35 * ((50000.0 / self.displacement) ** 0.4)
-        decel_rate = 0.55 * ((50000.0 / self.displacement) ** 0.4)
+        accel_rate = 0.5 * ((50000.0 / self.displacement) ** 0.4)
+        decel_rate = 0.8 * ((50000.0 / self.displacement) ** 0.4)
 
         if self.speed < self.target_speed:
             self.speed = min(self.target_speed, self.speed + accel_rate * dt)
@@ -147,34 +147,57 @@ class CargoASV:
                 self.speed = 0.0
             return
 
-        if self.path_index >= len(self.active_path):
-            self.state = "ARRIVED"
-            self.speed = 0.0
+        move_cells = (self.speed * dt) / cell_size_meters
+        if move_cells <= 0:
             return
 
-        target = self.active_path[self.path_index]
-        dx = target["x"] - self.x
-        dy = target["y"] - self.y
-        dist_cells = math.hypot(dx, dy)
+        remaining_move = move_cells
+        while remaining_move > 0 and self.path_index < len(self.active_path) - 1:
+            p_next = self.active_path[self.path_index + 1]
+            seg_dx = p_next["x"] - self.x
+            seg_dy = p_next["y"] - self.y
+            dist_to_next = math.hypot(seg_dx, seg_dy)
 
-        tolerance = max(0.4, (self.speed / 10.0))
-        if dist_cells <= tolerance:
-            self.path_index += 1
-            if self.path_index >= len(self.active_path):
+            if dist_to_next <= 0.001:
+                self.path_index += 1
+                continue
+
+            if remaining_move >= dist_to_next:
+                self.x = p_next["x"]
+                self.y = p_next["y"]
+                remaining_move -= dist_to_next
+                self.path_index += 1
+            else:
+                ratio = remaining_move / dist_to_next
+                self.x += seg_dx * ratio
+                self.y += seg_dy * ratio
+                remaining_move = 0.0
+
+        if self.path_index < len(self.active_path) - 1:
+            p_curr = self.active_path[self.path_index]
+            p_next = self.active_path[min(len(self.active_path) - 1, self.path_index + 1)]
+            target_heading = math.atan2(p_next["y"] - p_curr["y"], p_next["x"] - p_curr["x"])
+
+            diff = target_heading - self.heading
+            while diff > math.pi: diff -= 2 * math.pi
+            while diff < -math.pi: diff += 2 * math.pi
+
+            max_turn = max(0.15, (self.speed / self.min_turning_radius) * (cell_size_meters / 50.0) * 12.0) * dt
+            applied_turn = max(-max_turn, min(max_turn, diff))
+            self.heading += applied_turn
+            self.rudder_angle = max(-0.6, min(0.6, diff * 1.5))
+
+        # Hard obstacle collision guard: Never overlap land or shoal
+        if grid:
+            gx = int(round(self.x))
+            gy = int(round(self.y))
+            if not grid.in_bounds(gx, gy) or grid.cells[gy][gx] == grid.TYPE_LAND or grid.depths[gy][gx] < self.draft:
+                safe_pt = self.active_path[min(self.path_index, len(self.active_path) - 1)]
+                self.x = safe_pt["x"]
+                self.y = safe_pt["y"]
+
+        if self.path_index >= len(self.active_path) - 1:
+            final_dest = self.active_path[-1]
+            if math.hypot(final_dest["x"] - self.x, final_dest["y"] - self.y) < 0.25:
                 self.state = "ARRIVED"
                 self.speed = 0.0
-                return
-
-        desired_heading = math.atan2(dy, dx)
-        diff = desired_heading - self.heading
-        while diff > math.pi: diff -= 2 * math.pi
-        while diff < -math.pi: diff += 2 * math.pi
-
-        max_delta = self.max_turn_rate * dt
-        turn_step = max(-max_delta, min(max_delta, diff))
-        self.heading += turn_step
-        self.rudder_angle = max(-0.6, min(0.6, diff * 1.5))
-
-        move_cells = (self.speed * dt) / cell_size_meters
-        self.x += math.cos(self.heading) * move_cells
-        self.y += math.sin(self.heading) * move_cells

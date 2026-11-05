@@ -280,13 +280,24 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!grid.inBounds(gx, gy)) return;
 
     if (activeTool === 'set_start') {
+      isSimRunning = false;
+      if (btnRun) {
+        btnRun.textContent = '▶ Run';
+        btnRun.classList.remove('active');
+      }
       grid.setStart(gx, gy);
       ship.resetToStart(grid.start);
       updateDomainDisplay();
       executeThreeStagePipeline(false);
       logEvent(`Port M (Departure) relocated to (${gx}, ${gy}).`, 'info');
     } else if (activeTool === 'set_dest') {
+      isSimRunning = false;
+      if (btnRun) {
+        btnRun.textContent = '▶ Run';
+        btnRun.classList.remove('active');
+      }
       grid.setDestination(gx, gy);
+      ship.resetToStart(grid.start);
       updateDomainDisplay();
       executeThreeStagePipeline(false);
       logEvent(`Port N (Destination) relocated to (${gx}, ${gy}).`, 'info');
@@ -504,8 +515,8 @@ window.addEventListener('DOMContentLoaded', () => {
       // 3. Collision risk evaluation & dynamic rerouting
       obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent);
 
-      // 4. Update ASV kinematics & energy accumulation
-      ship.update(dt, grid.cellSizeMeters);
+      // 4. Update ASV kinematics & energy accumulation (with hard grid collision prevention)
+      ship.update(dt, grid, grid.cellSizeMeters);
 
       // 5. Update Live Telemetry
       if (statSpeed) statSpeed.textContent = `${(ship.speed / 0.514444).toFixed(1)} kn`;

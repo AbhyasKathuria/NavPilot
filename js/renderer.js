@@ -148,44 +148,71 @@ class MaritimeRenderer {
   }
 
   /**
-   * Vector line connecting Port M and Port N
+   * Vector line connecting Port M and Port N (Straight-line range display)
+   * If line of sight intersects land/shoals, avoids cutting through obstacles!
    */
   drawPortRangeVector(ctx) {
     const sx = (this.grid.start.x + 0.5) * this.cellSize;
     const sy = (this.grid.start.y + 0.5) * this.cellSize;
     const dx = (this.grid.destination.x + 0.5) * this.cellSize;
     const dy = (this.grid.destination.y + 0.5) * this.cellSize;
-
-    ctx.save();
-    ctx.setLineDash([4, 4]);
-    ctx.strokeStyle = 'rgba(10, 37, 64, 0.35)';
-    ctx.lineWidth = 1.0;
-    ctx.beginPath();
-    ctx.moveTo(sx, sy);
-    ctx.lineTo(dx, dy);
-    ctx.stroke();
-    ctx.restore();
-
-    // Range distance label
-    const midX = (sx + dx) / 2;
-    const midY = (sy + dy) / 2;
     const distInfo = this.grid.getStraightLineDistance();
 
+    // Check if direct line-of-sight has obstacle obstruction
+    const isDirectLOSClear = this.grid.lineOfSight(
+      this.grid.start.x, this.grid.start.y,
+      this.grid.destination.x, this.grid.destination.y,
+      this.ship.draft, 0.0
+    );
+
     ctx.save();
-    ctx.fillStyle = '#FFEED9';
-    ctx.strokeStyle = '#39A7FF';
-    ctx.lineWidth = 1.2;
-    const labelText = `Range: ${distInfo.nauticalMiles.toFixed(2)} NM (${distInfo.km.toFixed(2)} km)`;
-    ctx.font = '10px "Inter", sans-serif';
-    const textWidth = ctx.measureText(labelText).width;
+    if (isDirectLOSClear) {
+      // Draw faint direct line only when clear water
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = 'rgba(57, 167, 255, 0.28)';
+      ctx.lineWidth = 1.0;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(dx, dy);
+      ctx.stroke();
 
-    ctx.fillRect(midX - textWidth / 2 - 4, midY - 8, textWidth + 8, 16);
-    ctx.strokeRect(midX - textWidth / 2 - 4, midY - 8, textWidth + 8, 16);
+      // Range distance label at midpoint
+      const midX = (sx + dx) / 2;
+      const midY = (sy + dy) / 2;
+      const labelText = `Range: ${distInfo.nauticalMiles.toFixed(2)} NM (${distInfo.km.toFixed(2)} km)`;
+      ctx.font = '10px "Inter", sans-serif';
+      const textWidth = ctx.measureText(labelText).width;
 
-    ctx.fillStyle = '#0A2540';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(labelText, midX, midY);
+      ctx.fillStyle = '#FFEED9';
+      ctx.strokeStyle = '#39A7FF';
+      ctx.lineWidth = 1.2;
+      ctx.fillRect(midX - textWidth / 2 - 4, midY - 8, textWidth + 8, 16);
+      ctx.strokeRect(midX - textWidth / 2 - 4, midY - 8, textWidth + 8, 16);
+
+      ctx.fillStyle = '#0A2540';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(labelText, midX, midY);
+    } else {
+      // Obstacle in between: do NOT draw a line cutting through land!
+      // Display range badge neatly in open water near Port N
+      const labelText = `Direct Range: ${distInfo.nauticalMiles.toFixed(2)} NM (${distInfo.km.toFixed(2)} km)`;
+      ctx.font = '10px "Inter", sans-serif';
+      const textWidth = ctx.measureText(labelText).width;
+      const badgeX = Math.max(textWidth / 2 + 10, Math.min(500 - textWidth / 2 - 10, dx));
+      const badgeY = dy < 40 ? dy + 38 : dy - 44;
+
+      ctx.fillStyle = '#FFEED9';
+      ctx.strokeStyle = '#39A7FF';
+      ctx.lineWidth = 1.2;
+      ctx.fillRect(badgeX - textWidth / 2 - 4, badgeY - 8, textWidth + 8, 16);
+      ctx.strokeRect(badgeX - textWidth / 2 - 4, badgeY - 8, textWidth + 8, 16);
+
+      ctx.fillStyle = '#0A2540';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(labelText, badgeX, badgeY);
+    }
     ctx.restore();
   }
 
