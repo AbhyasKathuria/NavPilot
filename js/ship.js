@@ -139,14 +139,16 @@ class CargoShip {
     this.stage1Path = null;
     this.stage2Path = null;
     this.stage3Path = null;
+    this.selectedAlgorithmName = '—';
     this.hasReplanned = false;
     this.totalReplans = 0;
     this.totalEnergyConsumed = 0.0;
     this.trail = [];
   }
 
-  setPath(pathPoints, isReplan = false) {
+  setPath(pathPoints, isReplan = false, algorithmLabel = null) {
     if (!pathPoints || pathPoints.length === 0) return;
+    if (algorithmLabel) this.selectedAlgorithmName = algorithmLabel;
 
     if (!isReplan) {
       this.originalPath = pathPoints;
@@ -170,11 +172,14 @@ class CargoShip {
     this.state = 'CRUISING';
   }
 
-  setStagePaths(stage1, stage2, stage3) {
+  setStagePaths(stage1, stage2, stage3, activeOptimal = null, algorithmLabel = '3-Stage Hybrid Optimal') {
     this.stage1Path = stage1;
     this.stage2Path = stage2;
     this.stage3Path = stage3;
-    this.setPath(stage3 || stage2 || stage1, false);
+    const chosen = activeOptimal || stage3 || stage2 || stage1;
+    if (chosen) {
+      this.setPath(chosen, false, algorithmLabel);
+    }
   }
 
   holdAndWait() {
@@ -239,28 +244,32 @@ class CargoShip {
       }
     }
 
-    // Smooth heading alignment along the path tangent
+    // Smooth heading alignment using short lookahead tangent along path
     if (this.pathIndex < this.activePath.length - 1) {
-      const pCurr = this.activePath[this.pathIndex];
-      const pNext = this.activePath[Math.min(this.activePath.length - 1, this.pathIndex + 1)];
-      const targetHeading = Math.atan2(pNext.y - pCurr.y, pNext.x - pCurr.x);
+      const lookaheadIdx = Math.min(this.activePath.length - 1, this.pathIndex + 2);
+      const pTarget = this.activePath[lookaheadIdx];
+      const targetHeading = Math.atan2(pTarget.y - this.y, pTarget.x - this.x);
 
       let diff = targetHeading - this.heading;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
 
-      const maxTurn = Math.max(0.15, (this.speed / this.minTurningRadius) * (cellSizeMeters / 50.0) * 12.0) * dt;
+      const maxTurn = Math.max(0.4, (this.speed / this.minTurningRadius) * (cellSizeMeters / 50.0) * 14.0) * dt;
       const appliedTurn = Math.max(-maxTurn, Math.min(maxTurn, diff));
       this.heading += appliedTurn;
       this.rudderAngle = Math.max(-0.6, Math.min(0.6, diff * 1.5));
     }
 
-    // HARD OBSTACLE SAFETY GUARD: Absolute zero overlap with land or shallow shoals
+    // HARD OBSTACLE SAFETY GUARD: Continuous border + draft safety check
     if (grid) {
       const gx = Math.round(this.x);
       const gy = Math.round(this.y);
-      if (!grid.inBounds(gx, gy) || grid.cells[gy][gx] === grid.TYPE_LAND || grid.depths[gy][gx] < this.draft) {
-        // Clamp to nearest verified collision-free waypoint
+      const exactEdge = grid.getExactHazardDistanceMeters ? grid.getExactHazardDistanceMeters(this.x, this.y, this.draft) : 50.0;
+      const minSafeEdge = Math.min(20.0, this.beam * 0.45);
+      if (!grid.inBounds(gx, gy) ||
+          grid.cells[gy][gx] === grid.TYPE_LAND ||
+          grid.depths[gy][gx] < this.draft ||
+          exactEdge < minSafeEdge * 0.25) {
         const safePt = this.activePath[Math.min(this.pathIndex, this.activePath.length - 1)];
         this.x = safePt.x;
         this.y = safePt.y;

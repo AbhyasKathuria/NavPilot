@@ -2,18 +2,21 @@
  * NavPilot - Cargo Ship Real-Time Path-Planning Simulator
  * Main Application Orchestrator (main.js)
  *
- * Implements Three-Stage Hybrid Planning Pipeline:
- * Stage 1: A* Global Path Search (grid-based)
- * Stage 2: RRT* Kinematic Refinement (curvature-constrained)
- * Stage 3: Somersault Monkey Search Optimisation (multi-objective)
- * AIS Data simulation, Ship Domain (SS = L * B * D), Ports M and N.
+ * Implements:
+ * - Sequential 1-by-1 calculation of Algorithm 1 (A*) -> Algorithm 2 (RRT*) -> Algorithm 3 (Somersault Monkey Search)
+ * - 100% Collision Audit & Best Optimal Path Selection
+ * - Full Clear Dashboard mode (blank open sea ready for full customization)
+ * - Complete Entity Builder (Ports M/N, Land, Shoals, Cargo Ships, Mini Ships, Drift Hazards)
+ * - Offline Path Map Image & JSON Auto-Recognition
  */
 
 window.addEventListener('DOMContentLoaded', () => {
-  // DOM Elements
+  // Core Canvas & Display Elements
   const canvas = document.getElementById('mapCanvas');
   const speedSlider = document.getElementById('speedSlider');
   const speedDisplay = document.getElementById('speedDisplay');
+  const canvasModeStatus = document.getElementById('canvasModeStatus');
+  const canvasCoordsDisplay = document.getElementById('canvasCoordsDisplay');
 
   // Action Buttons
   const btnRun = document.getElementById('btnRun');
@@ -23,8 +26,33 @@ window.addEventListener('DOMContentLoaded', () => {
   const btnBenchmark = document.getElementById('btnBenchmark');
   const btnRandomMap = document.getElementById('btnRandomMap');
   const btnClearObstacles = document.getElementById('btnClearObstacles');
-  const btnAddAIS = document.getElementById('btnAddAIS');
-  const btnSpawnAIS = document.getElementById('btnSpawnAIS');
+  const presetSelect = document.getElementById('presetSelect');
+
+  // Traffic Quick Spawn Buttons
+  const btnSpawnCargoAIS = document.getElementById('btnSpawnCargoAIS');
+  const btnSpawnMiniAIS = document.getElementById('btnSpawnMiniAIS');
+  const btnSpawnHazard = document.getElementById('btnSpawnHazard');
+  const trafficCountBadge = document.getElementById('trafficCountBadge');
+
+  // Map Upload & Auto-Recognition Elements
+  const mapDropZone = document.getElementById('mapDropZone');
+  const mapFileInput = document.getElementById('mapFileInput');
+  const btnExportMap = document.getElementById('btnExportMap');
+  const mapImportPreviewBox = document.getElementById('mapImportPreviewBox');
+  const imgUploadThumb = document.getElementById('imgUploadThumb');
+  const canvasRecognizedPreview = document.getElementById('canvasRecognizedPreview');
+  const importStatsSummary = document.getElementById('importStatsSummary');
+  const importModeSelect = document.getElementById('importModeSelect');
+  const importSensitivity = document.getElementById('importSensitivity');
+  const importSensVal = document.getElementById('importSensVal');
+  const chkDetectPorts = document.getElementById('chkDetectPorts');
+  const chkDetectShoals = document.getElementById('chkDetectShoals');
+  const btnInvertMap = document.getElementById('btnInvertMap');
+
+  // Stage Flow Cards & Badges
+  const stepCards = [null, document.getElementById('stepCard1'), document.getElementById('stepCard2'), document.getElementById('stepCard3')];
+  const stepBadges = [null, document.getElementById('stepBadge1'), document.getElementById('stepBadge2'), document.getElementById('stepBadge3')];
+  const winnerBadgeDisplay = document.getElementById('winnerBadgeDisplay');
 
   // Visualization Layer Checkboxes
   const chkStage1 = document.getElementById('chkStage1');
@@ -38,10 +66,19 @@ window.addEventListener('DOMContentLoaded', () => {
     set_start: document.getElementById('toolSetStart'),
     set_dest: document.getElementById('toolSetDest'),
     paint_obstacle: document.getElementById('toolAddLand'),
-    paint_clear: document.getElementById('toolRemoveLand'),
     paint_shallow: document.getElementById('toolAddShallow'),
-    add_dynamic: document.getElementById('toolAddDynamic')
+    add_cargo_ship: document.getElementById('toolAddCargoShip'),
+    add_mini_ship: document.getElementById('toolAddMiniShip'),
+    add_dynamic: document.getElementById('toolAddDynamic'),
+    paint_clear: document.getElementById('toolRemoveLand')
   };
+
+  // Entity Placement Controls
+  const brushButtons = document.querySelectorAll('.brush-btn');
+  const placeCraftSpeed = document.getElementById('placeCraftSpeed');
+  const placeCraftHeading = document.getElementById('placeCraftHeading');
+  const chkPlaceAnchored = document.getElementById('chkPlaceAnchored');
+  const toolInstructionHint = document.getElementById('toolInstructionHint');
 
   // Ship Parameter Inputs
   const shipInputs = {
@@ -53,7 +90,7 @@ window.addEventListener('DOMContentLoaded', () => {
     minTurningRadius: document.getElementById('paramTurnRadius')
   };
 
-  // Ship Domain Displays
+  // Ship Domain & Port Displays
   const domainVolDisplay = document.getElementById('domainVolDisplay');
   const domainCalcText = document.getElementById('domainCalcText');
   const lblPortM = document.getElementById('lblPortM');
@@ -71,7 +108,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const statSpeed = document.getElementById('statSpeed');
   const statReplans = document.getElementById('statReplans');
 
-  // Log and Tables
+  // Tables & Event Log
   const aisTrafficTbody = document.getElementById('aisTrafficTbody');
   const comparisonTbody = document.getElementById('comparisonTbody');
   const eventLogList = document.getElementById('eventLogList');
@@ -79,14 +116,19 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // State Management
   let activeTool = 'paint_obstacle';
+  let brushRadius = 1; // 1 => 1x1, 2 => 3x3, 3 => 5x5
   let isSimRunning = false;
   let simulationSpeed = 1.0;
   let isMouseDown = false;
+  let dragStartCoord = null;
   let lastFrameTime = performance.now();
   let lastAisTableUpdate = 0;
+  let solverRunToken = 0; // Cancels older async sequential computations cleanly
+  let importInvertState = false;
+  let mapDirtySinceSolve = false;
 
   // Core Simulation Model Instances
-  const grid = new SeaGrid(50, 50, 50); // 50x50 cells, 50m per cell
+  const grid = new SeaGrid(50, 50, 50);
   const ship = new CargoShip({
     length: 200,
     beam: 32,
@@ -98,15 +140,13 @@ window.addEventListener('DOMContentLoaded', () => {
 
   const aisSystem = new AISSystem(grid);
   const obstacleManager = new DynamicObstacleManager(grid, aisSystem);
+  const mapImporter = new MapImageImporter();
   const renderer = new MaritimeRenderer(canvas, grid, ship, aisSystem, obstacleManager);
-
-  // Planners for the Three-Stage Architecture
-  const aStarPlanner = new AStarPlanner(grid);
-  const rrtStarPlanner = new RRTStarPlanner(grid);
-  const monkeySearchPlanner = new SomersaultMonkeySearchPlanner(grid);
   const threeStagePlanner = new ThreeStageHybridPlanner(grid);
 
-  // Logging Helper
+  // =========================================================================
+  // Utility & Logging Helpers
+  // =========================================================================
   function logEvent(message, type = 'info') {
     if (!eventLogList) return;
     const li = document.createElement('li');
@@ -118,33 +158,94 @@ window.addEventListener('DOMContentLoaded', () => {
     eventLogList.scrollTop = eventLogList.scrollHeight;
   }
 
-  logEvent('NavPilot Three-Stage Hybrid maritime system initialized.', 'info');
-  logEvent('Ship Domain formula: SS = L * B * D. Initial ports: Port M (5, 44) -> Port N (44, 6).', 'info');
-  logEvent('AIS System broadcasting live marine traffic for 4 commercial vessels.', 'info');
+  function sleepMs(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
-  // Layer Checkbox Listeners
-  if (chkStage1) chkStage1.addEventListener('change', () => { renderer.showStage1 = chkStage1.checked; });
-  if (chkStage2) chkStage2.addEventListener('change', () => { renderer.showStage2 = chkStage2.checked; });
-  if (chkStage3) chkStage3.addEventListener('change', () => { renderer.showStage3 = chkStage3.checked; });
-  if (chkShipDomain) chkShipDomain.addEventListener('change', () => { renderer.showShipDomain = chkShipDomain.checked; });
-  if (chkAISTraffic) chkAISTraffic.addEventListener('change', () => { renderer.showAISTraffic = chkAISTraffic.checked; });
+  function updateRunButtonUI(running) {
+    if (!btnRun) return;
+    if (running) {
+      btnRun.textContent = 'Running...';
+      btnRun.classList.add('active');
+    } else {
+      btnRun.textContent = '▶ Run All 3';
+      btnRun.classList.remove('active');
+    }
+  }
 
-  // Update Ship Domain Display
+  function resetStageCardsUI() {
+    for (let i = 1; i <= 3; i++) {
+      if (stepCards[i]) {
+        stepCards[i].classList.remove('active', 'computing', 'winner');
+      }
+      if (stepBadges[i]) {
+        stepBadges[i].textContent = 'Pending';
+        stepBadges[i].className = 'badge ' + (i === 1 ? 'badge-warning' : (i === 3 ? 'badge-success' : ''));
+        if (i === 2) {
+          stepBadges[i].style.background = '#E0F2FE';
+          stepBadges[i].style.color = '#0369A1';
+          stepBadges[i].style.border = '1px solid #7DD3FC';
+        }
+      }
+    }
+    if (winnerBadgeDisplay) winnerBadgeDisplay.textContent = 'Ready';
+  }
+
   function updateDomainDisplay() {
     const vol = ship.shipDomainVolume;
     if (domainVolDisplay) domainVolDisplay.textContent = `${(vol / 1000).toFixed(1)}k m³`;
     if (domainCalcText) {
-      domainCalcText.textContent = `${ship.length}m × ${ship.beam}m × ${ship.draft}m = ${vol.toLocaleString()} m³ (Domain radius: ${ship.domainRadiusMeters.toFixed(1)}m)`;
+      domainCalcText.textContent = `${ship.length}m × ${ship.beam}m × ${ship.draft}m = ${vol.toLocaleString()} m³ (Domain: ${ship.domainRadiusMeters.toFixed(0)}m)`;
     }
     if (lblPortM) lblPortM.textContent = `Port M (${grid.start.x}, ${grid.start.y})`;
     if (lblPortN) lblPortN.textContent = `Port N (${grid.destination.x}, ${grid.destination.y})`;
     if (statStopping) statStopping.textContent = `${ship.computeStoppingDistanceMeters().toFixed(0)} m`;
   }
 
-  // Update AIS Marine Traffic Table
+  function clearTelemetryAndTables(statusLabel = 'READY (BLANK CHART)') {
+    if (statAlg) statAlg.textContent = statusLabel;
+    if (statNodes) statNodes.textContent = '—';
+    if (statLength) statLength.textContent = '—';
+    if (statSmoothness) statSmoothness.textContent = '—';
+    if (statEnergy) statEnergy.textContent = '—';
+    if (statETA) statETA.textContent = '—';
+    if (statClearance) statClearance.textContent = '—';
+    if (statSpeed) statSpeed.textContent = '0.0 kn';
+    if (statReplans) statReplans.textContent = '0';
+
+    if (comparisonTbody) {
+      comparisonTbody.innerHTML = `
+        <tr>
+          <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 10px;">
+            Chart ready — add ships, mini-ships &amp; obstacles or upload a map, then click <strong>▶ Run All 3</strong>.
+          </td>
+        </tr>
+      `;
+    }
+  }
+
+  // =========================================================================
+  // AIS & Dynamic Entities Table Rendering
+  // =========================================================================
   function updateAISTrafficTable() {
+    if (trafficCountBadge) {
+      const shipCount = aisSystem.vessels.length;
+      const hazCount = obstacleManager.obstacles.length;
+      trafficCountBadge.textContent = `${shipCount} ${shipCount === 1 ? 'ship' : 'ships'} | ${hazCount} ${hazCount === 1 ? 'hazard' : 'hazards'}`;
+    }
     if (!aisTrafficTbody) return;
     aisTrafficTbody.innerHTML = '';
+
+    if (aisSystem.vessels.length === 0) {
+      aisTrafficTbody.innerHTML = `
+        <tr>
+          <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 8px;">
+            No ships placed. Select <strong>🚢 Cargo Ship</strong> or <strong>🚤 Mini Ship</strong> to place on map.
+          </td>
+        </tr>
+      `;
+      return;
+    }
 
     aisSystem.vessels.forEach(v => {
       const tr = document.createElement('tr');
@@ -155,204 +256,524 @@ window.addEventListener('DOMContentLoaded', () => {
       if (v.riskLevel === 'COLLISION_ALERT') riskBadge = '<span class="badge badge-danger">Alert</span>';
       else if (v.riskLevel === 'WARNING') riskBadge = '<span class="badge badge-warning">Caution</span>';
 
-      const cpaStr = v.cpaMeters !== Infinity ? `${v.cpaMeters.toFixed(0)}m` : '—';
-      const tcpaStr = v.tcpaSeconds !== Infinity ? `${v.tcpaSeconds.toFixed(1)}s` : '—';
+      const cpaStr = (v.cpaMeters !== undefined && v.cpaMeters !== Infinity) ? `${v.cpaMeters.toFixed(0)}m` : '—';
+      const tcpaStr = (v.tcpaSeconds !== undefined && v.tcpaSeconds !== Infinity) ? `${v.tcpaSeconds.toFixed(1)}s` : '—';
+      const classLabel = v.vesselCategory === 'mini' ? '🚤 Mini' : '🚢 Cargo';
 
       tr.innerHTML = `
-        <td>${v.mmsi}</td>
         <td><strong>${v.name}</strong></td>
-        <td>${v.type}</td>
-        <td>${v.sog.toFixed(1)} kn</td>
+        <td>${classLabel}</td>
+        <td>${v.sog.toFixed(1)}kn</td>
         <td>${v.cog.toFixed(0)}°</td>
         <td>${cpaStr}</td>
         <td>${tcpaStr}</td>
         <td>${riskBadge}</td>
+        <td><button class="btn-del-row" data-mmsi="${v.mmsi}" title="Remove vessel">✖</button></td>
       `;
       aisTrafficTbody.appendChild(tr);
     });
   }
 
-  // Execute Three-Stage Hybrid Pipeline
-  function executeThreeStagePipeline(autoStartSimulation = true) {
-    logEvent(`Stage 1: A* Global Search from Port M (${grid.start.x}, ${grid.start.y}) to Port N (${grid.destination.x}, ${grid.destination.y})...`, 'info');
-
-    const result = threeStagePlanner.plan(grid.start, grid.destination, ship, aisSystem);
-
-    if (!result.success || !result.path || result.path.length === 0) {
-      logEvent(`Three-Stage Pipeline failed: ${result.message}`, 'error');
-      if (autoStartSimulation) {
-        alert(`Path Planning Failed: ${result.message}`);
+  // Event delegation for vessel removal button in AIS table
+  if (aisTrafficTbody) {
+    aisTrafficTbody.addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-del-row');
+      if (!btn) return;
+      const mmsi = btn.getAttribute('data-mmsi');
+      const removed = aisSystem.removeVessel(mmsi);
+      if (removed) {
+        logEvent(`Removed ${removed.name} from sea chart.`, 'info');
+        updateAISTrafficTable();
       }
-      return;
-    }
-
-    logEvent(`Stage 1 (A*) complete: coarse waypoint route (${result.stage1.lengthMeters.toFixed(0)}m, ${result.stage1.computeTimeMs.toFixed(1)}ms).`, 'success');
-    logEvent(`Stage 2 (RRT*) complete: curvature-constrained feasible path (${result.stage2.computeTimeMs.toFixed(1)}ms, R >= ${ship.minTurningRadius}m).`, 'success');
-    logEvent(`Stage 3 (Somersault Monkey Search) complete: final multi-objective ASV route (${result.stage3.computeTimeMs.toFixed(1)}ms, Energy Index: ${result.stage3.energyIndex}).`, 'success');
-
-    // Update ship paths for rendering
-    ship.setStagePaths(result.stage1.path, result.stage2.path, result.stage3.path);
-
-    // Update Live Telemetry
-    if (statAlg) statAlg.textContent = 'HYBRID 3-STAGE';
-    if (statNodes) statNodes.textContent = `${result.stage1.nodesExpanded} (A*) | ${result.stage2.tree.length} (RRT*)`;
-    if (statLength) statLength.textContent = `${result.lengthMeters.toFixed(0)} m (${(result.lengthMeters / 1852).toFixed(2)} NM)`;
-    if (statSmoothness) statSmoothness.textContent = `${result.smoothnessDeg.toFixed(1)}°`;
-    if (statEnergy) statEnergy.textContent = `${result.energyIndex} (Optimized)`;
-    if (statClearance) statClearance.textContent = `${result.minClearanceMeters.toFixed(1)} m`;
-    if (statReplans) statReplans.textContent = '0';
-
-    const mins = Math.floor(result.transitTimeSec / 60);
-    const secs = Math.floor(result.transitTimeSec % 60);
-    if (statETA) statETA.textContent = `${mins}m ${secs}s`;
-
-    if (autoStartSimulation) {
-      if (result.stage1 && result.stage1.path) {
-        renderer.startExplorationAnimation(result.stage1.path, () => {
-          isSimRunning = true;
-          if (btnRun) {
-            btnRun.textContent = 'Running...';
-            btnRun.classList.add('active');
-          }
-        });
-      } else {
-        isSimRunning = true;
-        if (btnRun) {
-          btnRun.textContent = 'Running...';
-          btnRun.classList.add('active');
-        }
-      }
-    }
-
-    updateBenchmarkTable();
+    });
   }
 
-  // Update Benchmark Comparison Table
-  function updateBenchmarkTable() {
+  // =========================================================================
+  // Algorithm Comparison Table Renderer
+  // =========================================================================
+  function renderComparisonRows(resultsList, winnerId = null) {
     if (!comparisonTbody) return;
     comparisonTbody.innerHTML = '';
 
-    // Run evaluations
-    const s1 = aStarPlanner.plan(grid.start, grid.destination, ship.draft, ship.computeRequiredClearanceMeters());
-    const coarse = threeStagePlanner.extractCoarseWaypoints(s1.path);
-    const s2 = rrtStarPlanner.refine(coarse, ship, aisSystem);
-    const s3 = monkeySearchPlanner.optimize(s2.waypoints, ship, aisSystem, 25);
-    const sFull = threeStagePlanner.lastResult || threeStagePlanner.plan(grid.start, grid.destination, ship, aisSystem);
-
-    const rows = [
-      { name: 'Stage 1: A* Global (Grid Baseline)', res: s1, id: 's1' },
-      { name: 'Stage 2: RRT* Kinematic Refinement', res: s2, id: 's2' },
-      { name: 'Stage 3: Somersault Monkey Search', res: s3, id: 's3' },
-      { name: 'Full 3-Stage Hybrid Architecture (Fig 3.2)', res: sFull, id: 'hybrid' }
-    ];
-
-    rows.forEach(item => {
+    resultsList.forEach(item => {
       const r = item.res;
       const tr = document.createElement('tr');
-      if (item.id === 'hybrid') tr.className = 'highlight-row';
+      const isWinner = winnerId && item.id === winnerId;
+      if (isWinner) tr.className = 'highlight-row';
 
-      const isSuccess = r && r.success;
-      tr.innerHTML = `
-        <td><strong>${item.name}</strong></td>
-        <td>${isSuccess ? `${r.computeTimeMs.toFixed(1)} ms` : 'Failed'}</td>
-        <td>${isSuccess ? (r.nodesExpanded || r.nodesSampled || '16 pop') : '—'}</td>
-        <td>${isSuccess ? `${r.lengthMeters.toFixed(0)} m` : '—'}</td>
-        <td>${isSuccess ? `${r.smoothnessDeg.toFixed(1)}°` : '—'}</td>
-        <td>${isSuccess ? `${r.minClearanceMeters.toFixed(1)} m` : '—'}</td>
-        <td>${isSuccess ? (r.curvatureViolations || 0) : '—'}</td>
-        <td><span class="badge ${isSuccess ? 'badge-success' : 'badge-danger'}">${isSuccess ? 'Feasible' : 'Blocked'}</span></td>
-      `;
+      const isComputing = item.state === 'computing';
+      const isPending = item.state === 'pending';
+
+      if (isPending) {
+        tr.innerHTML = `
+          <td><strong>${item.name}</strong></td>
+          <td colspan="6" style="color: var(--text-muted); text-align:center;">Waiting in queue...</td>
+        `;
+      } else if (isComputing) {
+        tr.innerHTML = `
+          <td><strong>${item.name}</strong></td>
+          <td colspan="6" style="color: #0284C7; font-weight:700; text-align:center;">⏳ Computing optimal corridor...</td>
+        `;
+      } else {
+        const isSuccess = r && r.success && r.collisionFree !== false;
+        const nodesText = isSuccess ? (r.nodesExpanded || r.nodesSampled || '16 pop') : '—';
+        const statusBadge = isWinner
+          ? '<span class="badge badge-success">🏆 OPTIMAL</span>'
+          : (isSuccess
+            ? '<span class="badge badge-success">Safe ✓</span>'
+            : '<span class="badge badge-danger">Blocked</span>');
+
+        tr.innerHTML = `
+          <td><strong>${item.name}</strong></td>
+          <td>${r && r.success ? `${r.computeTimeMs.toFixed(1)}ms` : 'Failed'}</td>
+          <td>${nodesText}</td>
+          <td>${isSuccess ? `${r.lengthMeters.toFixed(0)}m` : '—'}</td>
+          <td>${isSuccess ? `${r.smoothnessDeg.toFixed(1)}°` : '—'}</td>
+          <td>${isSuccess ? `${r.minClearanceMeters.toFixed(1)}m` : '—'}</td>
+          <td>${statusBadge}</td>
+        `;
+      }
       comparisonTbody.appendChild(tr);
     });
   }
 
-  // Interactive Tools Implementation
-  function applyToolAtPixel(clientX, clientY) {
+  // =========================================================================
+  // Sequential One-By-One Solver (Algo 1 -> Algo 2 -> Algo 3 -> Pick Best -> Sail)
+  // =========================================================================
+  async function runSequentialThreeAlgorithms(autoStartNavigation = true) {
+    const token = ++solverRunToken;
+    mapDirtySinceSolve = false;
+    isSimRunning = false;
+    updateRunButtonUI(false);
+
+    ship.resetToStart(grid.start);
+    renderer.clearAllAnimations();
+    resetStageCardsUI();
+
+    const stepDelay = simulationSpeed >= 2.5 ? 240 : 460;
+    const rows = [
+      { id: 'stage1', name: '1. A* Global Search', state: 'pending', res: null },
+      { id: 'stage2', name: '2. RRT* Kinematic Refinement', state: 'pending', res: null },
+      { id: 'stage3', name: '3. Somersault Monkey Search', state: 'pending', res: null },
+      { id: 'hybrid', name: 'Combined 3-Stage Hybrid Optimal', state: 'pending', res: null }
+    ];
+
+    if (statAlg) statAlg.textContent = 'COMPUTING 1/3...';
+
+    // -----------------------------------------------------------------------
+    // ALGORITHM 1: A* GLOBAL PATH SEARCH
+    // -----------------------------------------------------------------------
+    rows[0].state = 'computing';
+    renderComparisonRows(rows);
+    if (stepCards[1]) stepCards[1].classList.add('computing');
+    if (stepBadges[1]) stepBadges[1].textContent = 'COMPUTING';
+    renderer.solverStatusBanner = '⏳ Algorithm 1/3: Computing A* Global Safe Corridor...';
+    logEvent(`[Algo 1/3] Computing A* Global Search from Port M (${grid.start.x}, ${grid.start.y}) ➔ Port N (${grid.destination.x}, ${grid.destination.y})...`, 'info');
+
+    await sleepMs(40);
+    if (token !== solverRunToken) return;
+
+    const stage1 = threeStagePlanner.runStage1(grid.start, grid.destination, ship, aisSystem, obstacleManager);
+    rows[0].state = 'done';
+    rows[0].res = stage1;
+
+    if (!stage1.success) {
+      if (stepCards[1]) stepCards[1].classList.remove('computing');
+      if (stepBadges[1]) stepBadges[1].textContent = 'FAILED';
+      renderer.solverStatusBanner = '⛔ No collision-free path exists between Ports M & N';
+      renderComparisonRows(rows);
+      clearTelemetryAndTables('BLOCKED');
+      logEvent(`Algorithm 1 (A*) failed: ${stage1.message}`, 'error');
+      return;
+    }
+
+    ship.stage1Path = stage1.path;
+    renderer.startExplorationAnimation(stage1.explored);
+    if (stepCards[1]) {
+      stepCards[1].classList.remove('computing');
+      stepCards[1].classList.add('active');
+    }
+    if (stepBadges[1]) stepBadges[1].textContent = `${stage1.lengthMeters.toFixed(0)}m`;
+    renderComparisonRows(rows);
+    logEvent(`[Algo 1/3] A* complete: ${stage1.lengthMeters.toFixed(0)}m (${stage1.nodesExpanded} nodes, ${stage1.smoothnessDeg.toFixed(1)}° turn, min clear ${stage1.minClearanceMeters.toFixed(1)}m).`, 'success');
+
+    await sleepMs(stepDelay);
+    if (token !== solverRunToken) return;
+
+    // -----------------------------------------------------------------------
+    // ALGORITHM 2: RRT* KINEMATIC REFINEMENT
+    // -----------------------------------------------------------------------
+    rows[1].state = 'computing';
+    renderComparisonRows(rows);
+    if (stepCards[2]) stepCards[2].classList.add('computing');
+    if (stepBadges[2]) stepBadges[2].textContent = 'COMPUTING';
+    if (statAlg) statAlg.textContent = 'COMPUTING 2/3...';
+    renderer.solverStatusBanner = '⏳ Algorithm 2/3: Computing RRT* Kinematic Refinement (R ≥ R_min)...';
+    logEvent(`[Algo 2/3] Computing RRT* Kinematic Refinement (R ≥ ${ship.minTurningRadius}m)...`, 'info');
+
+    await sleepMs(40);
+    if (token !== solverRunToken) return;
+
+    const stage2 = threeStagePlanner.runStage2(stage1, ship, aisSystem, obstacleManager);
+    rows[1].state = 'done';
+    rows[1].res = stage2;
+
+    ship.stage2Path = stage2.path;
+    renderer.startRrtTreeAnimation(stage2.treeEdges);
+    if (stepCards[2]) {
+      stepCards[2].classList.remove('computing');
+      stepCards[2].classList.add('active');
+    }
+    if (stepBadges[2]) stepBadges[2].textContent = `${stage2.lengthMeters.toFixed(0)}m`;
+    renderComparisonRows(rows);
+    logEvent(`[Algo 2/3] RRT* complete: ${stage2.lengthMeters.toFixed(0)}m (${stage2.nodesSampled} samples, ${stage2.smoothnessDeg.toFixed(1)}° turn, min clear ${stage2.minClearanceMeters.toFixed(1)}m).`, 'success');
+
+    await sleepMs(stepDelay);
+    if (token !== solverRunToken) return;
+
+    // -----------------------------------------------------------------------
+    // ALGORITHM 3: SOMERSAULT MONKEY SEARCH OPTIMISATION
+    // -----------------------------------------------------------------------
+    rows[2].state = 'computing';
+    rows[3].state = 'computing';
+    renderComparisonRows(rows);
+    if (stepCards[3]) stepCards[3].classList.add('computing');
+    if (stepBadges[3]) stepBadges[3].textContent = 'COMPUTING';
+    if (statAlg) statAlg.textContent = 'COMPUTING 3/3...';
+    renderer.solverStatusBanner = '⏳ Algorithm 3/3: Somersault Monkey Search Multi-Objective Optimisation...';
+    logEvent('[Algo 3/3] Computing Somersault Monkey Search (Climb ➔ Watch-Jump ➔ Somersault)...', 'info');
+
+    await sleepMs(40);
+    if (token !== solverRunToken) return;
+
+    const stage3 = threeStagePlanner.runStage3(stage2, stage1, ship, aisSystem, obstacleManager, 25);
+    rows[2].state = 'done';
+    rows[2].res = stage3;
+    rows[3].state = 'done';
+    rows[3].res = stage3.hybrid;
+
+    ship.stage3Path = stage3.path;
+    renderer.startMonkeyAnimation(stage3.iterationHistory);
+    if (stepCards[3]) {
+      stepCards[3].classList.remove('computing');
+      stepCards[3].classList.add('active');
+    }
+    if (stepBadges[3]) stepBadges[3].textContent = `${stage3.lengthMeters.toFixed(0)}m`;
+    renderComparisonRows(rows);
+    logEvent(`[Algo 3/3] Somersault Monkey Search complete: ${stage3.lengthMeters.toFixed(0)}m (Turn: ${stage3.smoothnessDeg.toFixed(1)}°, Energy: ${stage3.energyIndex}).`, 'success');
+
+    await sleepMs(stepDelay);
+    if (token !== solverRunToken) return;
+
+    // -----------------------------------------------------------------------
+    // AUDIT ALL CANDIDATES & PICK STRICTLY BEST 100% COLLISION-FREE ROUTE
+    // -----------------------------------------------------------------------
+    const winner = threeStagePlanner.selectOptimalCandidate(stage1, stage2, stage3, ship, aisSystem, obstacleManager);
+
+    if (!winner) {
+      renderer.solverStatusBanner = '⛔ Zero safe collision-free corridor found!';
+      logEvent('Audit rejected all candidate trajectories due to unsafe obstacle proximity.', 'error');
+      return;
+    }
+
+    threeStagePlanner.lastResult = {
+      success: true,
+      path: winner.path,
+      waypoints: winner.waypoints,
+      winnerId: winner.id,
+      winnerName: winner.name,
+      stage1,
+      stage2,
+      stage3,
+      hybrid: stage3.hybrid,
+      computeTimeMs: stage1.computeTimeMs + stage2.computeTimeMs + stage3.computeTimeMs,
+      ...winner
+    };
+
+    // Mark winning stage card & comparison row
+    renderComparisonRows(rows, winner.id);
+    if (winnerBadgeDisplay) winnerBadgeDisplay.textContent = `🏆 ${winner.id.toUpperCase()}`;
+
+    if (winner.id === 'stage1' && stepCards[1]) stepCards[1].classList.add('winner');
+    else if (winner.id === 'stage2' && stepCards[2]) stepCards[2].classList.add('winner');
+    else if (stepCards[3]) stepCards[3].classList.add('winner');
+
+    // Update Ship Trajectory
+    ship.setStagePaths(stage1.path, stage2.path, stage3.path, winner.path, winner.name);
+    renderer.solverStatusBanner = `🏆 Best Optimal Selected: ${winner.name} (${winner.lengthMeters.toFixed(0)}m | 0 Collisions)`;
+
+    // Update Telemetry
+    if (statAlg) statAlg.textContent = winner.name.replace('Algorithm ', '').replace('Combined ', '');
+    if (statNodes) statNodes.textContent = `${stage1.nodesExpanded} (A*) | ${stage2.nodesSampled} (RRT*)`;
+    if (statLength) statLength.textContent = `${winner.lengthMeters.toFixed(0)} m (${(winner.lengthMeters / 1852).toFixed(2)} NM)`;
+    if (statSmoothness) statSmoothness.textContent = `${winner.smoothnessDeg.toFixed(1)}°`;
+    if (statEnergy) statEnergy.textContent = `${winner.energyIndex} (Low Drag)`;
+    if (statClearance) statClearance.textContent = `${winner.minClearanceMeters.toFixed(1)} m (100% Safe)`;
+    if (statReplans) statReplans.textContent = '0';
+
+    const mins = Math.floor(winner.transitTimeSec / 60);
+    const secs = Math.floor(winner.transitTimeSec % 60);
+    if (statETA) statETA.textContent = `${mins}m ${secs}s`;
+
+    logEvent(`🏆 AUDIT WINNER: ${winner.name} | Length: ${winner.lengthMeters.toFixed(0)}m | Min Clearance: ${winner.minClearanceMeters.toFixed(1)}m | Collisions: 0.`, 'success');
+
+    if (autoStartNavigation) {
+      await sleepMs(380);
+      if (token !== solverRunToken) return;
+      renderer.solverStatusBanner = '';
+      isSimRunning = true;
+      updateRunButtonUI(true);
+      logEvent('ASV departing Port M along verified Optimal Path with active collision shield.', 'info');
+    } else {
+      ship.state = 'IDLE';
+      ship.speed = 0.0;
+      await sleepMs(1600);
+      if (token === solverRunToken) renderer.solverStatusBanner = '';
+    }
+  }
+
+  // Synchronous instant benchmark update (for parameter tweaks/preset switch without launching navigation)
+  function runInstantComparisonSnapshot() {
+    solverRunToken++;
+    const res = threeStagePlanner.plan(grid.start, grid.destination, ship, aisSystem, { obstacleManager });
+    renderer.clearAllAnimations();
+    resetStageCardsUI();
+
+    if (!res.success) {
+      ship.resetToStart(grid.start);
+      clearTelemetryAndTables('BLOCKED');
+      return;
+    }
+
+    ship.setStagePaths(res.stage1.path, res.stage2.path, res.stage3.path, res.path, res.winnerName);
+    ship.state = 'IDLE';
+    ship.speed = 0.0;
+
+    if (statAlg) statAlg.textContent = res.winnerName.replace('Algorithm ', '').replace('Combined ', '');
+    if (statNodes) statNodes.textContent = `${res.stage1.nodesExpanded} (A*) | ${res.stage2.nodesSampled} (RRT*)`;
+    if (statLength) statLength.textContent = `${res.lengthMeters.toFixed(0)} m (${(res.lengthMeters / 1852).toFixed(2)} NM)`;
+    if (statSmoothness) statSmoothness.textContent = `${res.smoothnessDeg.toFixed(1)}°`;
+    if (statEnergy) statEnergy.textContent = `${res.energyIndex} (Low Drag)`;
+    if (statClearance) statClearance.textContent = `${res.minClearanceMeters.toFixed(1)} m`;
+    const mins = Math.floor(res.transitTimeSec / 60);
+    const secs = Math.floor(res.transitTimeSec % 60);
+    if (statETA) statETA.textContent = `${mins}m ${secs}s`;
+
+    const rows = [
+      { id: 'stage1', name: '1. A* Global Search', state: 'done', res: res.stage1 },
+      { id: 'stage2', name: '2. RRT* Kinematic Refinement', state: 'done', res: res.stage2 },
+      { id: 'stage3', name: '3. Somersault Monkey Search', state: 'done', res: res.stage3 },
+      { id: 'hybrid', name: 'Combined 3-Stage Hybrid Optimal', state: 'done', res: res.hybrid }
+    ];
+    renderComparisonRows(rows, res.winnerId);
+    if (winnerBadgeDisplay) winnerBadgeDisplay.textContent = `🏆 ${res.winnerId.toUpperCase()}`;
+  }
+
+  // =========================================================================
+  // Clear Entire Dashboard to 100% Blank Sea
+  // =========================================================================
+  function clearEntireDashboard() {
+    solverRunToken++;
+    isSimRunning = false;
+    updateRunButtonUI(false);
+
+    grid.clearToBlankSea(ship.draft);
+    aisSystem.clear();
+    obstacleManager.clear();
+    ship.resetToStart(grid.start);
+    renderer.clearAllAnimations();
+    resetStageCardsUI();
+
+    if (presetSelect) presetSelect.value = 'blank';
+    if (winnerBadgeDisplay) winnerBadgeDisplay.textContent = 'Blank Chart';
+    updateDomainDisplay();
+    updateAISTrafficTable();
+    clearTelemetryAndTables('READY (BLANK SEA)');
+
+    logEvent('Dashboard cleared: Open blue sea chart ready. Add ships, mini-ships, obstacles, or upload a map!', 'info');
+  }
+
+  // =========================================================================
+  // Interactive Map Tools, Brush Sizes & Drag-Heading Vessel Placement
+  // =========================================================================
+  function getGridCoordFromMouse(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = 500 / rect.width;
     const scaleY = 500 / rect.height;
     const px = (clientX - rect.left) * scaleX;
     const py = (clientY - rect.top) * scaleY;
+    return {
+      x: Math.floor(px / renderer.cellSize),
+      y: Math.floor(py / renderer.cellSize)
+    };
+  }
 
-    const gx = Math.floor(px / renderer.cellSize);
-    const gy = Math.floor(py / renderer.cellSize);
+  function applyPaintBrush(gx, gy, cellType, depthVal) {
+    const offset = brushRadius - 1;
+    for (let dy = -offset; dy <= offset; dy++) {
+      for (let dx = -offset; dx <= offset; dx++) {
+        const nx = gx + dx;
+        const ny = gy + dy;
+        if (!grid.inBounds(nx, ny)) continue;
+        if (cellType !== grid.TYPE_SEA && (grid.isStart(nx, ny) || grid.isDestination(nx, ny))) continue;
+        grid.setCell(nx, ny, cellType, depthVal);
+      }
+    }
+    grid.computeDistanceField(ship.draft);
+    mapDirtySinceSolve = true;
+  }
 
+  function applyPointOrDragTool(gx, gy) {
     if (!grid.inBounds(gx, gy)) return;
 
     if (activeTool === 'set_start') {
+      solverRunToken++;
       isSimRunning = false;
-      if (btnRun) {
-        btnRun.textContent = '▶ Run';
-        btnRun.classList.remove('active');
-      }
+      updateRunButtonUI(false);
       grid.setStart(gx, gy);
-      ship.resetToStart(grid.start);
-      updateDomainDisplay();
-      executeThreeStagePipeline(false);
-      logEvent(`Port M (Departure) relocated to (${gx}, ${gy}).`, 'info');
-    } else if (activeTool === 'set_dest') {
-      isSimRunning = false;
-      if (btnRun) {
-        btnRun.textContent = '▶ Run';
-        btnRun.classList.remove('active');
-      }
-      grid.setDestination(gx, gy);
-      ship.resetToStart(grid.start);
-      updateDomainDisplay();
-      executeThreeStagePipeline(false);
-      logEvent(`Port N (Destination) relocated to (${gx}, ${gy}).`, 'info');
-    } else if (activeTool === 'paint_obstacle') {
-      if (!grid.isStart(gx, gy) && !grid.isDestination(gx, gy)) {
-        grid.setCell(gx, gy, grid.TYPE_LAND);
-        grid.computeDistanceField(ship.draft);
-      }
-    } else if (activeTool === 'paint_clear') {
-      grid.setCell(gx, gy, grid.TYPE_SEA);
       grid.computeDistanceField(ship.draft);
+      ship.resetToStart(grid.start);
+      updateDomainDisplay();
+      logEvent(`Port M (Start) placed at (${gx}, ${gy}).`, 'info');
+    } else if (activeTool === 'set_dest') {
+      solverRunToken++;
+      isSimRunning = false;
+      updateRunButtonUI(false);
+      grid.setDestination(gx, gy);
+      grid.computeDistanceField(ship.draft);
+      ship.resetToStart(grid.start);
+      updateDomainDisplay();
+      logEvent(`Port N (Destination) placed at (${gx}, ${gy}).`, 'info');
+    } else if (activeTool === 'paint_obstacle') {
+      applyPaintBrush(gx, gy, grid.TYPE_LAND, 0.0);
     } else if (activeTool === 'paint_shallow') {
-      if (!grid.isStart(gx, gy) && !grid.isDestination(gx, gy)) {
-        grid.setCell(gx, gy, grid.TYPE_SHALLOW, 8.0);
-        grid.computeDistanceField(ship.draft);
+      applyPaintBrush(gx, gy, grid.TYPE_SHALLOW, 7.5);
+    } else if (activeTool === 'paint_clear') {
+      applyPaintBrush(gx, gy, grid.TYPE_SEA, 28.0);
+      const rmVessel = aisSystem.removeNearest(gx, gy, Math.max(1.8, brushRadius));
+      const rmHazard = obstacleManager.removeNear(gx, gy, Math.max(1.8, brushRadius));
+      if (rmVessel) {
+        logEvent(`Erased vessel ${rmVessel.name}.`, 'info');
+        updateAISTrafficTable();
       }
-    } else if (activeTool === 'add_dynamic') {
-      obstacleManager.addObstacle(gx, gy, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, 'iceberg', 30);
-      logEvent(`Spawned drifting hazard at (${gx}, ${gy}).`, 'info');
+      if (rmHazard) {
+        logEvent(`Erased drifting hazard #${rmHazard.id}.`, 'info');
+        updateAISTrafficTable();
+      }
     }
   }
 
-  // Canvas Mouse Listeners
+  function completeVectorPlacement(startPt, endPt) {
+    if (!startPt || !grid.inBounds(startPt.x, startPt.y)) return;
+    if (grid.cells[startPt.y][startPt.x] === grid.TYPE_LAND) {
+      logEvent('Cannot place ship or hazard directly inside solid land obstacle!', 'warning');
+      return;
+    }
+
+    const dx = endPt.x - startPt.x;
+    const dy = endPt.y - startPt.y;
+    const isAnchored = chkPlaceAnchored && chkPlaceAnchored.checked;
+    const cfgSpeed = isAnchored ? 0.0 : (placeCraftSpeed ? Math.max(0, Number(placeCraftSpeed.value)) : 12.0);
+    let cogDeg = placeCraftHeading ? Number(placeCraftHeading.value) : 135;
+
+    if (Math.hypot(dx, dy) >= 1.0) {
+      cogDeg = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+      if (placeCraftHeading) placeCraftHeading.value = Math.round(cogDeg);
+    }
+
+    if (activeTool === 'add_cargo_ship') {
+      const v = aisSystem.addCustomVessel({
+        vesselCategory: 'cargo',
+        x: startPt.x,
+        y: startPt.y,
+        sog: cfgSpeed,
+        cog: cogDeg
+      });
+      mapDirtySinceSolve = true;
+      logEvent(`Placed Cargo Ship: ${v.name} at (${startPt.x}, ${startPt.y}) | ${cfgSpeed.toFixed(1)}kn @ ${cogDeg.toFixed(0)}°`, 'info');
+      updateAISTrafficTable();
+    } else if (activeTool === 'add_mini_ship') {
+      const v = aisSystem.addCustomVessel({
+        vesselCategory: 'mini',
+        x: startPt.x,
+        y: startPt.y,
+        sog: isAnchored ? 0.0 : Math.max(cfgSpeed, 14.0),
+        cog: cogDeg
+      });
+      mapDirtySinceSolve = true;
+      logEvent(`Placed Mini Ship: ${v.name} at (${startPt.x}, ${startPt.y}) | ${v.sog.toFixed(1)}kn @ ${cogDeg.toFixed(0)}°`, 'info');
+      updateAISTrafficTable();
+    } else if (activeTool === 'add_dynamic') {
+      const rad = (cogDeg * Math.PI) / 180.0;
+      const driftCellsPerSec = isAnchored ? 0.0 : Math.max(0.15, Math.min(0.65, (cfgSpeed * 0.514444) / 50.0 * 0.6));
+      const vx = Math.sin(rad) * driftCellsPerSec;
+      const vy = -Math.cos(rad) * driftCellsPerSec;
+      const obs = obstacleManager.addObstacle(startPt.x, startPt.y, vx, vy, Math.random() > 0.3 ? 'iceberg' : 'debris', 32);
+      mapDirtySinceSolve = true;
+      logEvent(`Placed Dynamic ${obs.type.toUpperCase()} Hazard #${obs.id} at (${startPt.x}, ${startPt.y}).`, 'info');
+      updateAISTrafficTable();
+    }
+  }
+
+  // Canvas Mouse Handlers
   if (canvas) {
     canvas.addEventListener('mousedown', (e) => {
       isMouseDown = true;
-      applyToolAtPixel(e.clientX, e.clientY);
+      const pt = getGridCoordFromMouse(e.clientX, e.clientY);
+      if (activeTool === 'add_cargo_ship' || activeTool === 'add_mini_ship' || activeTool === 'add_dynamic') {
+        dragStartCoord = pt;
+        renderer.setPlacementPreview({ startX: pt.x, startY: pt.y, endX: pt.x, endY: pt.y, tool: activeTool });
+      } else {
+        applyPointOrDragTool(pt.x, pt.y);
+      }
     });
 
-    window.addEventListener('mouseup', () => {
+    window.addEventListener('mouseup', (e) => {
+      if (isMouseDown && dragStartCoord) {
+        const pt = getGridCoordFromMouse(e.clientX, e.clientY);
+        completeVectorPlacement(dragStartCoord, pt);
+        dragStartCoord = null;
+        renderer.setPlacementPreview(null);
+      }
       isMouseDown = false;
     });
 
     canvas.addEventListener('mousemove', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = 500 / rect.width;
-      const scaleY = 500 / rect.height;
-      const px = (e.clientX - rect.left) * scaleX;
-      const py = (e.clientY - rect.top) * scaleY;
-      const gx = Math.floor(px / renderer.cellSize);
-      const gy = Math.floor(py / renderer.cellSize);
+      const pt = getGridCoordFromMouse(e.clientX, e.clientY);
+      renderer.setHoverCoord(pt.x, pt.y);
 
-      renderer.setHoverCoord(gx, gy);
+      if (canvasCoordsDisplay && grid.inBounds(pt.x, pt.y)) {
+        const d = grid.depths[pt.y][pt.x];
+        canvasCoordsDisplay.textContent = `Cell (${pt.x}, ${pt.y}) | Depth: ${d.toFixed(1)}m`;
+      }
 
-      if (isMouseDown && (activeTool === 'paint_obstacle' || activeTool === 'paint_clear' || activeTool === 'paint_shallow')) {
-        applyToolAtPixel(e.clientX, e.clientY);
+      if (isMouseDown) {
+        if (dragStartCoord) {
+          renderer.setPlacementPreview({ startX: dragStartCoord.x, startY: dragStartCoord.y, endX: pt.x, endY: pt.y, tool: activeTool });
+        } else if (activeTool === 'paint_obstacle' || activeTool === 'paint_clear' || activeTool === 'paint_shallow') {
+          applyPointOrDragTool(pt.x, pt.y);
+        }
       }
     });
 
     canvas.addEventListener('mouseleave', () => {
       renderer.setHoverCoord(-1, -1);
+      if (canvasCoordsDisplay) canvasCoordsDisplay.textContent = 'Hover cell to inspect depth & clearance';
     });
   }
 
-  // Tool Buttons Setup
+  // Tool & Brush UI Binding
+  const toolHints = {
+    set_start: 'Click open water to relocate Port M',
+    set_dest: 'Click open water to relocate Port N',
+    paint_obstacle: 'Click / drag to draw Land obstacles',
+    paint_shallow: 'Click / drag to draw Shallow Shoals',
+    add_cargo_ship: 'Click (or drag heading) to place Cargo Ship',
+    add_mini_ship: 'Click (or drag heading) to place Mini Ship',
+    add_dynamic: 'Click (or drag drift) to place Iceberg/Debris',
+    paint_clear: 'Click / drag to erase cells, ships & hazards'
+  };
+
   Object.keys(toolButtons).forEach(tool => {
     const btn = toolButtons[tool];
     if (!btn) return;
@@ -360,11 +781,27 @@ window.addEventListener('DOMContentLoaded', () => {
       Object.values(toolButtons).forEach(b => b && b.classList.remove('active'));
       btn.classList.add('active');
       activeTool = tool;
-      logEvent(`Tool selected: ${btn.textContent.trim()}`, 'info');
+      if (canvasModeStatus) canvasModeStatus.textContent = `Tool: ${btn.textContent.trim()}`;
+      if (toolInstructionHint && toolHints[tool]) toolInstructionHint.textContent = toolHints[tool];
     });
   });
 
-  // Parameter Change Listeners
+  brushButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      brushButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      brushRadius = parseInt(btn.getAttribute('data-brush') || '1', 10);
+    });
+  });
+
+  // Layer Checkbox Listeners
+  if (chkStage1) chkStage1.addEventListener('change', () => { renderer.showStage1 = chkStage1.checked; });
+  if (chkStage2) chkStage2.addEventListener('change', () => { renderer.showStage2 = chkStage2.checked; });
+  if (chkStage3) chkStage3.addEventListener('change', () => { renderer.showStage3 = chkStage3.checked; });
+  if (chkShipDomain) chkShipDomain.addEventListener('change', () => { renderer.showShipDomain = chkShipDomain.checked; });
+  if (chkAISTraffic) chkAISTraffic.addEventListener('change', () => { renderer.showAISTraffic = chkAISTraffic.checked; });
+
+  // Ship Parameter Inputs
   function readShipInputs() {
     if (!shipInputs.length) return;
     ship.updateParameters({
@@ -383,12 +820,146 @@ window.addEventListener('DOMContentLoaded', () => {
     if (!input) return;
     input.addEventListener('change', () => {
       readShipInputs();
-      logEvent(`Ship domain parameter updated: ${input.id.replace('param', '')} = ${input.value}`, 'info');
-      executeThreeStagePipeline(false);
+      mapDirtySinceSolve = true;
+      logEvent(`Own vessel specs updated: ${input.id.replace('param', '')} = ${input.value}`, 'info');
     });
   });
 
-  // Speed Slider
+  // =========================================================================
+  // Uploaded Path Map Image & JSON Auto-Recognition
+  // =========================================================================
+  function runImageMapRecognition() {
+    if (!mapImporter.hasImage()) return;
+
+    solverRunToken++;
+    isSimRunning = false;
+    updateRunButtonUI(false);
+
+    const summary = mapImporter.recognizeAndApply(grid, ship.draft, {
+      mode: importModeSelect ? importModeSelect.value : 'auto',
+      sensitivity: importSensitivity ? parseFloat(importSensitivity.value) : 0.52,
+      invert: importInvertState,
+      detectPorts: chkDetectPorts ? chkDetectPorts.checked : true,
+      detectShoals: chkDetectShoals ? chkDetectShoals.checked : true
+    });
+
+    if (!summary) return;
+
+    // Remove or relocate any existing AIS ships/hazards that fell onto newly detected land obstacles
+    aisSystem.vessels = aisSystem.vessels.filter(v => {
+      const gx = Math.round(v.x), gy = Math.round(v.y);
+      return grid.inBounds(gx, gy) && grid.cells[gy][gx] !== grid.TYPE_LAND;
+    });
+    obstacleManager.obstacles = obstacleManager.obstacles.filter(o => {
+      const gx = Math.round(o.x), gy = Math.round(o.y);
+      return grid.inBounds(gx, gy) && grid.cells[gy][gx] !== grid.TYPE_LAND;
+    });
+
+    ship.resetToStart(grid.start);
+    renderer.clearAllAnimations();
+    resetStageCardsUI();
+    updateDomainDisplay();
+    updateAISTrafficTable();
+    clearTelemetryAndTables('MAP BUILT — READY TO RUN');
+
+    if (canvasRecognizedPreview) {
+      mapImporter.renderPreview(canvasRecognizedPreview, grid);
+    }
+    if (importStatsSummary) {
+      const portTag = summary.portsDetected.start || summary.portsDetected.destination ? 'Ports Auto-Found' : 'Ports Placed';
+      importStatsSummary.textContent = `${summary.landCount} Land | ${summary.shoalCount} Shoal | ${summary.seaCount} Sea (${portTag})`;
+    }
+
+    logEvent(`Auto-recognized uploaded map "${summary.fileName}" [${summary.detectedStyle}]: ${summary.landCount} land cells, ${summary.shoalCount} shoal cells built! Click ▶ Run All 3 to compute optimal path.`, 'success');
+  }
+
+  function handleUploadedMapFile(file) {
+    mapImporter.loadFile(
+      file,
+      (img, fileName) => {
+        if (mapImportPreviewBox) mapImportPreviewBox.style.display = 'block';
+        if (imgUploadThumb) imgUploadThumb.src = img.src;
+        importInvertState = false;
+        runImageMapRecognition();
+      },
+      (jsonData, fileName) => {
+        if (grid.loadFromJSON(jsonData, ship.draft)) {
+          solverRunToken++;
+          isSimRunning = false;
+          updateRunButtonUI(false);
+          ship.resetToStart(grid.start);
+          renderer.clearAllAnimations();
+          resetStageCardsUI();
+          updateDomainDisplay();
+          clearTelemetryAndTables('JSON MAP LOADED');
+          if (mapImportPreviewBox) mapImportPreviewBox.style.display = 'none';
+          logEvent(`Loaded JSON chart "${fileName}" cleanly.`, 'success');
+        } else {
+          logEvent('Invalid NavPilot JSON map format.', 'error');
+        }
+      },
+      (errMsg) => {
+        logEvent(errMsg, 'error');
+      }
+    );
+  }
+
+  if (mapDropZone && mapFileInput) {
+    mapDropZone.addEventListener('click', () => mapFileInput.click());
+    mapFileInput.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files[0]) {
+        handleUploadedMapFile(e.target.files[0]);
+        mapFileInput.value = '';
+      }
+    });
+
+    mapDropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      mapDropZone.classList.add('dragover');
+    });
+    mapDropZone.addEventListener('dragleave', () => mapDropZone.classList.remove('dragover'));
+    mapDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      mapDropZone.classList.remove('dragover');
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+        handleUploadedMapFile(e.dataTransfer.files[0]);
+      }
+    });
+  }
+
+  if (importModeSelect) importModeSelect.addEventListener('change', runImageMapRecognition);
+  if (chkDetectPorts) chkDetectPorts.addEventListener('change', runImageMapRecognition);
+  if (chkDetectShoals) chkDetectShoals.addEventListener('change', runImageMapRecognition);
+  if (importSensitivity) {
+    importSensitivity.addEventListener('input', () => {
+      if (importSensVal) importSensVal.textContent = `${Math.round(parseFloat(importSensitivity.value) * 100)}%`;
+      runImageMapRecognition();
+    });
+  }
+  if (btnInvertMap) {
+    btnInvertMap.addEventListener('click', () => {
+      importInvertState = !importInvertState;
+      runImageMapRecognition();
+    });
+  }
+
+  if (btnExportMap) {
+    btnExportMap.addEventListener('click', () => {
+      const jsonStr = grid.exportToJSON();
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'navpilot_sea_chart.json';
+      a.click();
+      URL.revokeObjectURL(url);
+      logEvent('Exported current 50×50 bathymetric chart as navpilot_sea_chart.json.', 'info');
+    });
+  }
+
+  // =========================================================================
+  // Core Control Button Event Listeners
+  // =========================================================================
   if (speedSlider) {
     speedSlider.addEventListener('input', () => {
       simulationSpeed = parseFloat(speedSlider.value);
@@ -396,129 +967,177 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Simulation Action Buttons
   if (btnRun) {
     btnRun.addEventListener('click', () => {
-      if (!ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED') {
-        executeThreeStagePipeline(true);
+      if (isSimRunning) return;
+      if (!ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED' || mapDirtySinceSolve) {
+        runSequentialThreeAlgorithms(true);
       } else {
         isSimRunning = true;
-        btnRun.textContent = 'Running...';
-        btnRun.classList.add('active');
-        logEvent('Simulation resumed along active ASV path.', 'info');
+        updateRunButtonUI(true);
+        logEvent('Resumed autonomous navigation along verified Optimal Path.', 'info');
       }
+    });
+  }
+
+  if (btnRunPipeline) {
+    btnRunPipeline.addEventListener('click', () => {
+      runSequentialThreeAlgorithms(false);
     });
   }
 
   if (btnPause) {
     btnPause.addEventListener('click', () => {
+      solverRunToken++;
       isSimRunning = false;
-      if (btnRun) {
-        btnRun.textContent = 'Run';
-        btnRun.classList.remove('active');
-      }
+      updateRunButtonUI(false);
       logEvent('Simulation paused.', 'info');
     });
   }
 
   if (btnReset) {
     btnReset.addEventListener('click', () => {
+      solverRunToken++;
       isSimRunning = false;
-      if (btnRun) {
-        btnRun.textContent = 'Run';
-        btnRun.classList.remove('active');
-      }
+      updateRunButtonUI(false);
       ship.resetToStart(grid.start);
-      executeThreeStagePipeline(false);
-      if (statReplans) statReplans.textContent = '0';
-      logEvent('ASV reset to Port M (Departure).', 'info');
-    });
-  }
-
-  if (btnRunPipeline) {
-    btnRunPipeline.addEventListener('click', () => {
-      executeThreeStagePipeline(false);
+      renderer.clearAllAnimations();
+      resetStageCardsUI();
+      clearTelemetryAndTables('RESET AT PORT M');
+      logEvent('Cargo ASV reset cleanly to Port M (Departure).', 'info');
     });
   }
 
   if (btnBenchmark) {
     btnBenchmark.addEventListener('click', () => {
-      updateBenchmarkTable();
-      logEvent('Ran full multi-algorithm benchmark comparison.', 'info');
-    });
-  }
-
-  if (btnRandomMap) {
-    btnRandomMap.addEventListener('click', () => {
-      grid.generateRandomMap();
-      ship.resetToStart(grid.start);
-      logEvent('Generated random archipelago map with navigational channels.', 'info');
-      executeThreeStagePipeline(false);
+      runSequentialThreeAlgorithms(false);
     });
   }
 
   if (btnClearObstacles) {
-    btnClearObstacles.addEventListener('click', () => {
-      grid.init();
+    btnClearObstacles.addEventListener('click', clearEntireDashboard);
+  }
+
+  if (btnRandomMap) {
+    btnRandomMap.addEventListener('click', () => {
+      solverRunToken++;
+      isSimRunning = false;
+      updateRunButtonUI(false);
+      grid.generateRandomMap();
       grid.computeDistanceField(ship.draft);
+      aisSystem.clear();
+      aisSystem.addRandomVessel('cargo');
+      aisSystem.addRandomVessel('cargo');
+      aisSystem.addRandomVessel('mini');
+      obstacleManager.clear();
       ship.resetToStart(grid.start);
-      logEvent('Cleared all static chart obstacles.', 'info');
-      executeThreeStagePipeline(false);
+      renderer.clearAllAnimations();
+      updateDomainDisplay();
+      updateAISTrafficTable();
+      logEvent('Generated random archipelago sea chart with vessels.', 'info');
+      runSequentialThreeAlgorithms(false);
     });
   }
 
-  function handleSpawnAIS() {
-    const v = aisSystem.addRandomVessel();
-    if (v) {
-      logEvent(`AIS Broadcast Registered: ${v.name} (MMSI: ${v.mmsi}) SOG: ${v.sog.toFixed(1)}kn COG: ${v.cog.toFixed(0)}°.`, 'info');
+  if (presetSelect) {
+    presetSelect.addEventListener('change', () => {
+      const preset = presetSelect.value;
+      if (preset === 'blank') {
+        clearEntireDashboard();
+        return;
+      }
+      solverRunToken++;
+      isSimRunning = false;
+      updateRunButtonUI(false);
+      grid.loadPreset(preset);
+      grid.computeDistanceField(ship.draft);
+      aisSystem.initDefaultTraffic();
+      // Ensure default vessels don't spawn inside preset land
+      aisSystem.vessels = aisSystem.vessels.filter(v => {
+        const gx = Math.round(v.x), gy = Math.round(v.y);
+        return grid.inBounds(gx, gy) && grid.cells[gy][gx] !== grid.TYPE_LAND;
+      });
+      obstacleManager.clear();
+      ship.resetToStart(grid.start);
+      updateDomainDisplay();
       updateAISTrafficTable();
-    }
+      logEvent(`Loaded maritime chart preset: ${preset.toUpperCase()}.`, 'info');
+      runInstantComparisonSnapshot();
+    });
   }
 
-  if (btnAddAIS) btnAddAIS.addEventListener('click', handleSpawnAIS);
-  if (btnSpawnAIS) btnSpawnAIS.addEventListener('click', handleSpawnAIS);
+  if (btnSpawnCargoAIS) {
+    btnSpawnCargoAIS.addEventListener('click', () => {
+      const v = aisSystem.addRandomVessel('cargo');
+      if (v) {
+        logEvent(`Spawned Cargo Vessel: ${v.name} (SOG ${v.sog.toFixed(1)}kn, COG ${v.cog.toFixed(0)}°).`, 'info');
+        updateAISTrafficTable();
+      }
+    });
+  }
+
+  if (btnSpawnMiniAIS) {
+    btnSpawnMiniAIS.addEventListener('click', () => {
+      const v = aisSystem.addRandomVessel('mini');
+      if (v) {
+        logEvent(`Spawned Mini Ship: ${v.name} (SOG ${v.sog.toFixed(1)}kn, COG ${v.cog.toFixed(0)}°).`, 'info');
+        updateAISTrafficTable();
+      }
+    });
+  }
+
+  if (btnSpawnHazard) {
+    btnSpawnHazard.addEventListener('click', () => {
+      const obs = obstacleManager.addRandomObstacle();
+      if (obs) {
+        logEvent(`Spawned Dynamic ${obs.type.toUpperCase()} #${obs.id} at (${obs.x.toFixed(0)}, ${obs.y.toFixed(0)}).`, 'info');
+        updateAISTrafficTable();
+      }
+    });
+  }
 
   if (btnClearLog) {
     btnClearLog.addEventListener('click', () => {
       if (eventLogList) eventLogList.innerHTML = '';
-      logEvent('Navigation log cleared.', 'info');
+      logEvent('Solver & collision log cleared.', 'info');
     });
   }
 
-  // Initial Startup Run
+  // Initial Startup Snapshot
+  logEvent('NavPilot Three-Stage Sequential Solver initialized (SS = L × B × D).', 'info');
   readShipInputs();
-  executeThreeStagePipeline(false);
   updateAISTrafficTable();
-  updateBenchmarkTable();
+  runInstantComparisonSnapshot();
 
   // =========================================================================
   // Main Real-Time 60 FPS Loop
-  // Dynamic obstacles and AIS vessels update continuously before, during,
-  // and after path planning.
   // =========================================================================
   function mainLoop(timestamp) {
     const rawDt = (timestamp - lastFrameTime) / 1000.0;
     lastFrameTime = timestamp;
     const dt = Math.min(0.1, rawDt) * simulationSpeed;
 
-    // 1. AIS traffic and dynamic obstacles move continuously
+    // 1. Dynamic obstacles and AIS ships / mini ships move continuously
     aisSystem.update(dt);
     obstacleManager.update(dt);
 
-    // 2. Periodic AIS table refresh (every 0.5s)
-    if (timestamp - lastAisTableUpdate > 500) {
+    // 2. Refresh AIS table CPA/TCPA smoothly every 0.4s
+    if (timestamp - lastAisTableUpdate > 400) {
       lastAisTableUpdate = timestamp;
+      if (ship.activePath) {
+        aisSystem.evaluateTrafficRisk(ship, ship.lookaheadHorizonSeconds);
+      }
       updateAISTrafficTable();
     }
 
     if (isSimRunning) {
-      // 3. Collision risk evaluation & dynamic rerouting
+      // 3. Evaluate dynamic threats & trigger immediate Path B avoidance if conflict detected
       obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent);
 
-      // 4. Update ASV kinematics & energy accumulation (with hard grid collision prevention)
+      // 4. Advance ship smoothly along verified optimal corridor with hard border safety clamp
       ship.update(dt, grid, grid.cellSizeMeters);
 
-      // 5. Update Live Telemetry
+      // 5. Update Telemetry
       if (statSpeed) statSpeed.textContent = `${(ship.speed / 0.514444).toFixed(1)} kn`;
       if (statReplans) statReplans.textContent = `${ship.totalReplans}`;
 
@@ -543,17 +1162,12 @@ window.addEventListener('DOMContentLoaded', () => {
 
       if (ship.state === 'ARRIVED') {
         isSimRunning = false;
-        if (btnRun) {
-          btnRun.textContent = 'Run';
-          btnRun.classList.remove('active');
-        }
-        logEvent('Voyage complete: ASV arrived safely at Port N.', 'success');
+        updateRunButtonUI(false);
+        logEvent('Voyage complete: Cargo ASV reached Port N with 0 collisions!', 'success');
       }
     }
 
-    // Render Canvas
     renderer.render(dt);
-
     requestAnimationFrame(mainLoop);
   }
 

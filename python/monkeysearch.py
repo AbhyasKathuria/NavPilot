@@ -39,7 +39,7 @@ class SomersaultMonkeySearchPlanner:
         ship_draft = ship.draft
         required_clearance = ship.compute_required_clearance_meters()
 
-        normalized_waypoints = self.normalize_waypoints(seed_waypoints, 3.5)
+        normalized_waypoints = self.normalize_waypoints(seed_waypoints, 8.5)
         num_waypoints = len(normalized_waypoints)
 
         if num_waypoints <= 2:
@@ -52,7 +52,8 @@ class SomersaultMonkeySearchPlanner:
                 **self.evaluate_path(dense, normalized_waypoints, ship)
             }
 
-        pop_size = 16
+        pop_size = 10
+        max_iterations = min(14, max_iterations)
         population: List[List[Dict[str, float]]] = []
 
         # Monkey 0: exact verified seed path from Stage 2 RRT*
@@ -68,9 +69,9 @@ class SomersaultMonkeySearchPlanner:
                 ny = candidate[i]["y"] + jitter_y
 
                 # HARD COLLISION CHECK
-                if (self.grid.is_passable(nx, ny, ship_draft, required_clearance * 0.8) and
-                    self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], nx, ny, ship_draft, required_clearance * 0.8) and
-                    self.grid.line_of_sight(nx, ny, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance * 0.8)):
+                if (self.grid.is_passable(nx, ny, ship_draft, required_clearance) and
+                    self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], nx, ny, ship_draft, required_clearance) and
+                    self.grid.line_of_sight(nx, ny, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance)):
                     candidate[i]["x"] = nx
                     candidate[i]["y"] = ny
 
@@ -96,11 +97,14 @@ class SomersaultMonkeySearchPlanner:
                     orig_x = candidate[i]["x"]
                     orig_y = candidate[i]["y"]
 
+                    mid_x = (candidate[i - 1]["x"] + candidate[i + 1]["x"]) * 0.5
+                    mid_y = (candidate[i - 1]["y"] + candidate[i + 1]["y"]) * 0.5
                     offsets = [
                         (climb_step, 0.0),
                         (-climb_step, 0.0),
                         (0.0, climb_step),
-                        (0.0, -climb_step)
+                        (0.0, -climb_step),
+                        ((mid_x - orig_x) * 0.4, (mid_y - orig_y) * 0.4)
                     ]
 
                     best_local_x = orig_x
@@ -112,13 +116,13 @@ class SomersaultMonkeySearchPlanner:
                         ty = orig_y + dy
 
                         # HARD COLLISION INVARIANT
-                        if (self.grid.is_passable(tx, ty, ship_draft, required_clearance * 0.75) and
-                            self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], tx, ty, ship_draft, required_clearance * 0.75) and
-                            self.grid.line_of_sight(tx, ty, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance * 0.75)):
+                        if (self.grid.is_passable(tx, ty, ship_draft, required_clearance) and
+                            self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], tx, ty, ship_draft, required_clearance) and
+                            self.grid.line_of_sight(tx, ty, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance)):
                             candidate[i]["x"] = tx
                             candidate[i]["y"] = ty
 
-                            eval_fit = self.compute_fitness(candidate, ship, ais_system)
+                            eval_fit = self.compute_fitness(candidate, ship, ais_system, skip_los=True)
                             if eval_fit["total"] < current_fitness:
                                 current_fitness = eval_fit["total"]
                                 best_local_x = tx
@@ -127,7 +131,7 @@ class SomersaultMonkeySearchPlanner:
                     candidate[i]["x"] = best_local_x
                     candidate[i]["y"] = best_local_y
 
-                fitnesses[p] = self.compute_fitness(candidate, ship, ais_system)
+                fitnesses[p] = self.compute_fitness(candidate, ship, ais_system, skip_los=True)
 
             # 2. WATCH-JUMP PROCESS (Exploration away from coastlines and AIS traffic)
             jump_radius = max(0.4, 1.5 * (1.0 - iter_num / max_iterations))
@@ -164,15 +168,15 @@ class SomersaultMonkeySearchPlanner:
                     jy = candidate[i]["y"] + push_y
 
                     # HARD COLLISION INVARIANT
-                    if (self.grid.is_passable(jx, jy, ship_draft, required_clearance * 0.75) and
-                        self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], jx, jy, ship_draft, required_clearance * 0.75) and
-                        self.grid.line_of_sight(jx, jy, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance * 0.75)):
+                    if (self.grid.is_passable(jx, jy, ship_draft, required_clearance) and
+                        self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], jx, jy, ship_draft, required_clearance) and
+                        self.grid.line_of_sight(jx, jy, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance)):
                         orig_x = candidate[i]["x"]
                         orig_y = candidate[i]["y"]
                         candidate[i]["x"] = jx
                         candidate[i]["y"] = jy
 
-                        test_fit = self.compute_fitness(candidate, ship, ais_system)
+                        test_fit = self.compute_fitness(candidate, ship, ais_system, skip_los=True)
                         if test_fit["total"] < fitnesses[p]["total"]:
                             fitnesses[p] = test_fit
                         else:
@@ -200,13 +204,13 @@ class SomersaultMonkeySearchPlanner:
                     sy = candidate[i]["y"] + somersault_weight * (target_y - candidate[i]["y"]) + (random.random() - 0.5) * 0.2
 
                     # HARD COLLISION INVARIANT
-                    if (self.grid.is_passable(sx, sy, ship_draft, required_clearance * 0.75) and
-                        self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], sx, sy, ship_draft, required_clearance * 0.75) and
-                        self.grid.line_of_sight(sx, sy, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance * 0.75)):
+                    if (self.grid.is_passable(sx, sy, ship_draft, required_clearance) and
+                        self.grid.line_of_sight(candidate[i - 1]["x"], candidate[i - 1]["y"], sx, sy, ship_draft, required_clearance) and
+                        self.grid.line_of_sight(sx, sy, candidate[i + 1]["x"], candidate[i + 1]["y"], ship_draft, required_clearance)):
                         candidate[i]["x"] = sx
                         candidate[i]["y"] = sy
 
-                fitnesses[p] = self.compute_fitness(candidate, ship, ais_system)
+                fitnesses[p] = self.compute_fitness(candidate, ship, ais_system, skip_los=True)
 
             # Update global best
             for p in range(pop_size):
@@ -217,7 +221,7 @@ class SomersaultMonkeySearchPlanner:
         # Safety fallback check on every segment of global best
         is_safe = True
         for i in range(1, len(global_best)):
-            if not self.grid.line_of_sight(global_best[i - 1]["x"], global_best[i - 1]["y"], global_best[i]["x"], global_best[i]["y"], ship_draft, required_clearance * 0.7):
+            if not self.grid.line_of_sight(global_best[i - 1]["x"], global_best[i - 1]["y"], global_best[i]["x"], global_best[i]["y"], ship_draft, required_clearance):
                 is_safe = False
                 break
 
@@ -236,7 +240,7 @@ class SomersaultMonkeySearchPlanner:
             **metrics
         }
 
-    def compute_fitness(self, waypoints: List[Dict[str, float]], ship, ais_system) -> Dict:
+    def compute_fitness(self, waypoints: List[Dict[str, float]], ship, ais_system, skip_los: bool = False) -> Dict:
         """
         Multi-objective Fitness Function:
         HARD CONSTRAINT: If any segment crosses land or shallow reef, returns Infinity!
@@ -261,11 +265,9 @@ class SomersaultMonkeySearchPlanner:
                 self.grid.depths[gy][gx] < ship_draft):
                 return {"total": float("inf"), "invalid": True}
 
-            d_meters = self.grid.distance_field[gy][gx]
-            if d_meters < required_clearance:
-                proximity_penalty += (required_clearance - d_meters) * 10.0
-            elif d_meters < required_clearance * 2.5:
-                proximity_penalty += (required_clearance * 2.5 - d_meters) * 1.5
+            d_meters = self.grid.get_exact_hazard_distance_meters(pt["x"], pt["y"], ship_draft)
+            if d_meters < 65.0:
+                proximity_penalty += (65.0 - d_meters) * 1.5
 
             if ais_system:
                 for ves in ais_system.vessels:
@@ -277,8 +279,7 @@ class SomersaultMonkeySearchPlanner:
                         proximity_penalty += (combined_domain * 2.0 - d_vessel_m) * 1.2
 
             if i > 0:
-                # HARD CONSTRAINT on segment
-                if not self.grid.line_of_sight(waypoints[i - 1]["x"], waypoints[i - 1]["y"], pt["x"], pt["y"], ship_draft, required_clearance * 0.7):
+                if not skip_los and not self.grid.line_of_sight(waypoints[i - 1]["x"], waypoints[i - 1]["y"], pt["x"], pt["y"], ship_draft, required_clearance):
                     return {"total": float("inf"), "invalid": True}
 
                 seg_dist = math.hypot(pt["x"] - waypoints[i - 1]["x"], pt["y"] - waypoints[i - 1]["y"])
@@ -369,12 +370,9 @@ class SomersaultMonkeySearchPlanner:
         min_clearance = float("inf")
 
         for i, pt in enumerate(dense_path):
-            gx = int(round(pt["x"]))
-            gy = int(round(pt["y"]))
-            if self.grid.in_bounds(gx, gy):
-                d = self.grid.distance_field[gy][gx]
-                if d < min_clearance:
-                    min_clearance = d
+            d = self.grid.get_exact_hazard_distance_meters(pt["x"], pt["y"], ship.draft)
+            if d < min_clearance:
+                min_clearance = d
             if i > 0:
                 length_cells += math.hypot(pt["x"] - dense_path[i - 1]["x"], pt["y"] - dense_path[i - 1]["y"])
 

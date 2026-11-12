@@ -693,3 +693,223 @@ body {
   border-radius: 2px;
   border: 1px solid #777;
 }
+
+/* Clear All Dashboard Accent */
+.btn-clear-all {
+  padding: 2px 7px;
+  font-size: 9.5px;
+  background-color: var(--color-sand);
+  border-color: #DC2626;
+  color: #991B1B;
+}
+
+.btn-clear-all:hover {
+  background-color: #FEE2E2;
+  border-color: #B91C1C;
+  color: #7F1D1D;
+}
+
+/* Upload Path Map & Auto-Recognition Panel */
+.upload-drop-zone {
+  border: 2px dashed var(--color-ocean);
+  background-color: rgba(224, 244, 255, 0.55);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upload-drop-zone:hover,
+.upload-drop-zone.dragover {
+  background-color: rgba(135, 196, 255, 0.35);
+  border-color: #0284C7;
+}
+
+.upload-icon {
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.upload-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.upload-browse {
+  color: #0284C7;
+  text-decoration: underline;
+}
+
+.upload-hint {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.import-preview-box {
+  margin-top: 8px;
+  padding: 8px;
+  background-color: var(--color-sand);
+  border: 1.5px solid var(--color-sky);
+  border-radius: var(--radius-sm);
+}
+
+.preview-thumbnails {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.thumb-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.thumb-label {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.thumb-col img,
+.thumb-col canvas {
+  width: 100%;
+  max-width: 112px;
+  height: 112px;
+  object-fit: contain;
+  background-color: #FFFFFF;
+  border: 1.5px solid var(--color-ocean);
+  border-radius: var(--radius-sm);
+}
+
+.import-stats-pill {
+  margin-top: 6px;
+  background-color: #FFFFFF;
+  border: 1px solid var(--color-sky);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.import-toggles-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 9.5px;
+}
+
+/* Entity Options Bar (Brush size, Speed, Heading) */
+.entity-options-box {
+  background-color: rgba(224, 244, 255, 0.55);
+  border: 1.5px solid var(--color-sky);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  margin-top: 4px;
+}
+
+.brush-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.opt-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.brush-pills {
+  display: flex;
+  gap: 3px;
+}
+
+.brush-btn {
+  border: 1.5px solid var(--color-sky);
+  background-color: #FFFFFF;
+  color: var(--text-primary);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.brush-btn.active {
+  background-color: var(--color-ocean);
+  color: #FFFFFF;
+  border-color: #0284C7;
+}
+
+.opt-hint {
+  font-size: 9px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.craft-config-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  border-top: 1px solid rgba(135, 196, 255, 0.6);
+  padding-top: 5px;
+}
+
+.craft-field {
+  flex: 1;
+}
+
+.craft-field label {
+  display: block;
+  font-size: 8.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.craft-field input {
+  padding: 2px 5px;
+  font-size: 10px;
+}
+
+.anchored-check {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding-bottom: 3px;
+}
+
+/* Stage Cards Sequential States */
+.stage-step-card.computing {
+  background-color: rgba(57, 167, 255, 0.22);
+  border-color: var(--color-ocean);
+  box-shadow: 0 0 0 2px rgba(57, 167, 255, 0.3);
+}
+
+.stage-step-card.winner {
+  background-color: #DCFCE7;
+  border-color: #15803D;
+}
+
+.btn-del-row {
+  background-color: #FEE2E2;
+  color: #991B1B;
+  border: 1px solid #FCA5A5;
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-del-row:hover {
+  background-color: #FECACA;
+}

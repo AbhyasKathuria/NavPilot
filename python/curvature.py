@@ -143,18 +143,13 @@ class CurvatureSmoother:
                     "curvature": curvature * turn_sign
                 }
 
-                gx = int(round(pt["x"]))
-                gy = int(round(pt["y"]))
-
-                if (not self.grid.in_bounds(gx, gy) or
-                    self.grid.cells[gy][gx] == self.grid.TYPE_LAND or
-                    self.grid.depths[gy][gx] < ship_draft):
+                if not self.grid.is_passable(pt["x"], pt["y"], ship_draft, required_clearance_meters):
                     arc_is_safe = False
                     break
 
                 temp_arc_points.append(pt)
 
-            if arc_is_safe:
+            if arc_is_safe and self.grid.line_of_sight(current_pt["x"], current_pt["y"], arc_start["x"], arc_start["y"], ship_draft, required_clearance_meters):
                 # 1. Straight lead-in to arc_start
                 straight_lead = self.interpolate_segment(current_pt, arc_start, 0.35)
                 for s in range(1, len(straight_lead)):

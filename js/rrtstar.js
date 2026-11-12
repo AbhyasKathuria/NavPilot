@@ -24,23 +24,26 @@ class RRTStarPlanner {
   constructor(grid) {
     this.grid = grid;
     this.treeNodes = []; // stored for visualization
-    this.maxSamples = 120;
+    this.treeEdges = []; // { from: {x,y}, to: {x,y} } for animation
+    this.maxSamples = 140;
     this.stepSizeCells = 1.8;
   }
 
   /**
    * Refines coarse A* route into a kinematically feasible path
-   * respecting minimum turning radius R_min and strict obstacle clearance.
+   * respecting minimum turning radius R_min and strict continuous obstacle clearance.
    */
-  refine(coarseWaypoints, ship, aisSystem = null) {
+  refine(coarseWaypoints, ship, aisSystem = null, obstacleManager = null) {
     const startTime = performance.now();
     this.treeNodes = [];
+    this.treeEdges = [];
 
     if (!coarseWaypoints || coarseWaypoints.length < 2) {
       return {
         success: false,
         path: [],
         tree: [],
+        treeEdges: [],
         computeTimeMs: 0,
         message: 'Invalid coarse route input for Stage 2 RRT*.'
       };
@@ -61,36 +64,28 @@ class RRTStarPlanner {
     const rootNode = new RRTStarNode(startWp.x, startWp.y, initialHeading, 0, null);
     this.treeNodes.push(rootNode);
 
-    // -------------------------------------------------------------------------
-    // Informed Waypoint-by-Waypoint Kinematic RRT* Corridor Expansion
-    // -------------------------------------------------------------------------
-    // We expand through each coarse waypoint corridor to guarantee that
-    // the path connects Port M to Port N without ever straying into obstacles!
     let currentNode = rootNode;
-    const refinedWaypoints = [startWp];
+    const refinedWaypoints = [{ x: startWp.x, y: startWp.y }];
 
     for (let w = 1; w < coarseWaypoints.length; w++) {
       const targetWp = coarseWaypoints[w];
       const distToTarget = Math.hypot(targetWp.x - currentNode.x, targetWp.y - currentNode.y);
 
-      // Local tree exploration between currentNode and targetWp
-      const localSamples = Math.max(10, Math.min(25, Math.ceil(distToTarget * 3)));
+      const localSamples = Math.max(12, Math.min(28, Math.ceil(distToTarget * 3)));
       let bestLocalNode = null;
       let minLocalDist = Infinity;
 
       for (let s = 0; s < localSamples; s++) {
-        // Sample in the corridor between currentNode and targetWp
         const t = Math.random();
-        const corridorWidth = 2.0; // max 2 cells deviation
+        const corridorWidth = 2.4;
         const sampleX = currentNode.x + (targetWp.x - currentNode.x) * t + (Math.random() - 0.5) * corridorWidth;
         const sampleY = currentNode.y + (targetWp.y - currentNode.y) * t + (Math.random() - 0.5) * corridorWidth;
 
-        // Find nearest node in existing tree
+        // Find nearest node in recent tree window
         let nearest = currentNode;
         let nDist = Math.hypot(sampleX - nearest.x, sampleY - nearest.y);
 
-        // Check recent nodes in tree
-        const checkCount = Math.min(20, this.treeNodes.length);
+        const checkCount = Math.min(24, this.treeNodes.length);
         for (let k = this.treeNodes.length - checkCount; k < this.treeNodes.length; k++) {
           if (k >= 0) {
             const nd = Math.hypot(sampleX - this.treeNodes[k].x, sampleY - this.treeNodes[k].y);
@@ -111,10 +106,11 @@ class RRTStarPlanner {
         const newHeading = nearest.heading + clampedTurn;
 
         const stepLen = Math.min(this.stepSizeCells, nDist);
+        if (stepLen < 0.25) continue;
         const newX = nearest.x + Math.cos(newHeading) * stepLen;
         const newY = nearest.y + Math.sin(newHeading) * stepLen;
 
-        // STRICT COLLISION CHECK: must be passable and line-of-sight clear
+        // STRICT CONTINUOUS COLLISION CHECK: point + segment line-of-sight clear of land & shoals
         if (!this.grid.isPassable(newX, newY, shipDraft, requiredClearance)) {
           continue;
         }
@@ -122,27 +118,32 @@ class RRTStarPlanner {
           continue;
         }
 
-        // Avoid AIS traffic if in close proximity
-        if (aisSystem && this.isNearAISTraffic(newX, newY, aisSystem, requiredClearance * 1.1)) {
+        // Avoid AIS traffic & dynamic debris near node
+        if (aisSystem && this.isNearAISTraffic(newX, newY, aisSystem, ship.domainRadiusMeters * 1.15)) {
+          continue;
+        }
+        if (obstacleManager && this.isNearDynamicDebris(newX, newY, obstacleManager, ship.domainRadiusMeters)) {
           continue;
         }
 
         const cost = nearest.cost + stepLen + Math.abs(clampedTurn) * 2.0;
         const newNode = new RRTStarNode(newX, newY, newHeading, cost, nearest);
         this.treeNodes.push(newNode);
+        this.treeEdges.push({ from: { x: nearest.x, y: nearest.y }, to: { x: newX, y: newY } });
 
-        // Check proximity to target waypoint
+        // Check clear connection to targetWp
         const dTarget = Math.hypot(targetWp.x - newX, targetWp.y - newY);
         if (dTarget < minLocalDist) {
-          if (this.grid.lineOfSight(newX, newY, targetWp.x, targetWp.y, shipDraft, requiredClearance)) {
+          if (this.grid.lineOfSight(newX, newY, targetWp.x, targetWp.y, shipDraft, requiredClearance * 0.92)) {
             minLocalDist = dTarget;
             bestLocalNode = newNode;
           }
         }
       }
 
-      // Connect to target waypoint safely
-      if (bestLocalNode && minLocalDist < 3.0) {
+      // Connect to targetWp strictly only when LOS is 100% verified
+      if (bestLocalNode && minLocalDist < 3.2 &&
+          this.grid.lineOfSight(bestLocalNode.x, bestLocalNode.y, targetWp.x, targetWp.y, shipDraft, requiredClearance * 0.92)) {
         const arrivalHeading = Math.atan2(targetWp.y - bestLocalNode.y, targetWp.x - bestLocalNode.x);
         const targetNode = new RRTStarNode(
           targetWp.x,
@@ -152,10 +153,17 @@ class RRTStarPlanner {
           bestLocalNode
         );
         this.treeNodes.push(targetNode);
+        this.treeEdges.push({ from: { x: bestLocalNode.x, y: bestLocalNode.y }, to: { x: targetWp.x, y: targetWp.y } });
+
+        // Also preserve any intermediate hops from refinedWaypoints[-1] -> bestLocalNode if LOS is clear, else backtrack cleanly
+        const lastConfirmed = refinedWaypoints[refinedWaypoints.length - 1];
+        if (this.grid.lineOfSight(lastConfirmed.x, lastConfirmed.y, bestLocalNode.x, bestLocalNode.y, shipDraft, requiredClearance * 0.92)) {
+          refinedWaypoints.push({ x: bestLocalNode.x, y: bestLocalNode.y });
+        }
+        refinedWaypoints.push({ x: targetWp.x, y: targetWp.y });
         currentNode = targetNode;
-        refinedWaypoints.push(targetWp);
       } else {
-        // Safe direct step to target waypoint (verified collision-free by A*)
+        // Strict fallback directly to verified coarse targetWp
         const safeHeading = Math.atan2(targetWp.y - currentNode.y, targetWp.x - currentNode.x);
         const safeNode = new RRTStarNode(
           targetWp.x,
@@ -165,29 +173,27 @@ class RRTStarPlanner {
           currentNode
         );
         this.treeNodes.push(safeNode);
+        this.treeEdges.push({ from: { x: currentNode.x, y: currentNode.y }, to: { x: targetWp.x, y: targetWp.y } });
         currentNode = safeNode;
-        refinedWaypoints.push(targetWp);
+        refinedWaypoints.push({ x: targetWp.x, y: targetWp.y });
       }
     }
 
-    // -------------------------------------------------------------------------
-    // RRT* Rewiring Shortcuts (Any-angle smoothing along safe corridor)
-    // -------------------------------------------------------------------------
-    // Attempt shortcuts between non-adjacent waypoints ONLY IF line of sight is clear
+    // Rewiring Shortcuts (strictly verified continuous LOS + traffic clear)
     const shortcutWaypoints = [refinedWaypoints[0]];
     let currIdx = 0;
 
     while (currIdx < refinedWaypoints.length - 1) {
       let furthestClearIdx = currIdx + 1;
 
-      // Check how far ahead we can see clearly without touching land or shoals
       for (let nextIdx = refinedWaypoints.length - 1; nextIdx > currIdx + 1; nextIdx--) {
         const p1 = refinedWaypoints[currIdx];
         const p2 = refinedWaypoints[nextIdx];
 
         if (this.grid.lineOfSight(p1.x, p1.y, p2.x, p2.y, shipDraft, requiredClearance)) {
-          // Check AIS clearance along shortcut
-          if (!aisSystem || !this.isNearAISTrafficSegment(p1, p2, aisSystem, requiredClearance)) {
+          const aisBlocked = aisSystem && this.isNearAISTrafficSegment(p1, p2, aisSystem, requiredClearance);
+          const debrisBlocked = obstacleManager && this.isNearDebrisSegment(p1, p2, obstacleManager, requiredClearance);
+          if (!aisBlocked && !debrisBlocked) {
             furthestClearIdx = nextIdx;
             break;
           }
@@ -198,20 +204,43 @@ class RRTStarPlanner {
       currIdx = furthestClearIdx;
     }
 
-    // Dense interpolation respecting curvature
-    const densePath = this.interpolatePath(shortcutWaypoints, 0.4);
+    const densePath = this.interpolatePath(shortcutWaypoints, 0.35);
     const computeTimeMs = performance.now() - startTime;
-    const metrics = this.evaluatePath(densePath, shortcutWaypoints, ship.minTurningRadius);
+    const metrics = this.evaluatePath(densePath, shortcutWaypoints, shipDraft);
 
     return {
       success: true,
       path: densePath,
       waypoints: shortcutWaypoints,
       tree: this.treeNodes,
+      treeEdges: this.treeEdges,
       nodesSampled: this.treeNodes.length,
       computeTimeMs,
       ...metrics
     };
+  }
+
+  isNearDynamicDebris(x, y, obstacleManager, bufferMeters) {
+    const bufferCells = bufferMeters / this.grid.cellSizeMeters;
+    for (let i = 0; i < obstacleManager.obstacles.length; i++) {
+      const o = obstacleManager.obstacles[i];
+      if (Math.hypot(x - o.x, y - o.y) < bufferCells + (o.radiusMeters / this.grid.cellSizeMeters)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  isNearDebrisSegment(p1, p2, obstacleManager, bufferMeters) {
+    const bufferCells = bufferMeters / this.grid.cellSizeMeters;
+    for (let i = 0; i < obstacleManager.obstacles.length; i++) {
+      const o = obstacleManager.obstacles[i];
+      const dist = this.distPointToSegment(o.x, o.y, p1.x, p1.y, p2.x, p2.y);
+      if (dist < bufferCells + (o.radiusMeters / this.grid.cellSizeMeters)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   isNearAISTraffic(x, y, aisSystem, bufferMeters) {
@@ -269,17 +298,13 @@ class RRTStarPlanner {
     return dense;
   }
 
-  evaluatePath(densePath, waypoints, minTurningRadiusMeters) {
+  evaluatePath(densePath, waypoints, shipDraft = 12.0) {
     let lengthCells = 0;
     let minClearance = Infinity;
 
     for (let i = 0; i < densePath.length; i++) {
-      const gx = Math.round(densePath[i].x);
-      const gy = Math.round(densePath[i].y);
-      if (this.grid.inBounds(gx, gy)) {
-        const d = this.grid.distanceField[gy][gx];
-        if (d < minClearance) minClearance = d;
-      }
+      const d = this.grid.getExactHazardDistanceMeters(densePath[i].x, densePath[i].y, shipDraft);
+      if (d < minClearance) minClearance = d;
       if (i > 0) {
         lengthCells += Math.hypot(densePath[i].x - densePath[i - 1].x, densePath[i].y - densePath[i - 1].y);
       }

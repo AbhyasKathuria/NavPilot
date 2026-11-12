@@ -148,13 +148,31 @@ $$\text{Ship Domain } SS = L \times B \times D$$
 
   # Interactive visualization with custom preset
   python run_simulation.py --preset singapore --iterations 25 --show
+
+  # Auto-recognize an uploaded AI/chart image map or JSON chart directly
+  python run_simulation.py --map sample_sea_map.png --benchmark
   ```
 - **CLI Options**:
   - `--preset`: Choose maritime chart (`archipelago`, `singapore`, `ice_alley`, `canal`).
-  - `--benchmark`: Runs performance benchmark across all 4 algorithms.
-  - `--iterations`: Number of iterations for Somersault Monkey Search (default: 20).
+  - `--map`: Path to an image chart (`.png`/`.jpg`) or exported `.json` chart to auto-recognize obstacles, shoals & ports.
+  - `--sensitivity`: Image obstacle recognition sensitivity threshold (default: `0.52`).
+  - `--benchmark`: Runs performance benchmark across all algorithms and selects optimal path.
+  - `--iterations`: Number of iterations for Somersault Monkey Search (default: `20`).
   - `--show`: Displays interactive matplotlib visualization window.
   - `--save`: Destination file for the high-res plot (default: `navpilot_simulation.png`).
+
+---
+
+## 🛠️ New Interactive Capabilities
+
+1. **🗑 Full Blank Chart Clear (`Clear All`)**:
+   - Wipes land, shallow shoals, AIS cargo/mini ships, dynamic drifting hazards, and previous planned trajectories cleanly back to open blue water so you can compose every entity from scratch.
+2. **🚢 Full Entity Builder (`Port M/N`, `Land`, `Shoal`, `Cargo Ship`, `Mini Ship`, `Drift Hazard`, `Erase`)**:
+   - Supports selectable paint brushes (`1×1`, `3×3`, `5×5`) and **Click-and-Drag Direction Vectors** on the sea grid to aim headings (`COG °`) and speeds (`SOG kn`, or `0 kn` static anchorage) for placed ships, mini ships, and drifting icebergs/debris.
+3. **⚡ Sequential 3-Algorithm Solver & Optimal Zero-Collision Audit**:
+   - Executes **Algorithm 1: A\*** $\to$ **Algorithm 2: RRT\*** $\to$ **Algorithm 3: Somersault Monkey Search** step-by-step visually on canvas, scores all candidates across transit time, rudder drag energy, curvature feasibility, and continuous hull-border obstacle clearance (`getExactHazardDistanceMeters`), highlights the **🏆 OPTIMAL** winner, and navigates cleanly around all static and moving entities.
+4. **🗺️ Path Map Image Upload & Offline Auto-Recognition**:
+   - Drag & drop or upload any nautical chart image, black-on-white maze sketch, or AI-generated map photo (including the included `sample_sea_map.png`). Auto-recognizes land obstacles, shallow sandbar reefs, deep water channels, and green/red Port M & Port N markers cleanly offline using Canvas 2D with live sensitivity & detection-mode tuning.
 
 ---
 
@@ -165,51 +183,52 @@ NavPilot/
 ├── start.bat                   # 1-click Windows launcher for Web Simulator
 ├── run_python.bat              # 1-click Windows launcher for Python Simulation
 ├── run_simulation.py           # Python simulation & benchmark entry point
-├── index.html                  # Single-page interface with 3-stage UI, AIS table & telemetry
-├── style.css                   # Strict 4-color palette CSS stylesheet & bridge theme
+├── index.html                  # Single-page interface with 3-stage UI, uploader & telemetry
+├── style.css                   # Strict 4-color palette CSS stylesheet (#E0F4FF/#87C4FF/#39A7FF/#FFEED9)
 ├── README.md                   # Technical documentation and operational guide
+├── sample_sea_map.png          # Ready-to-test sample top-down nautical sea map image
 ├── NavPilot.zip                # Offline distribution package
 ├── navpilot_simulation.png     # High-resolution simulation plot output
 ├── js/                         # JavaScript Implementation (Browser Simulator)
-│   ├── grid.js                 # 50×50 bathymetric grid, EDT, Port M & N
+│   ├── grid.js                 # 50×50 bathymetric grid, exact continuous clearance, Port M & N
 │   ├── ship.js                 # Ship Domain SS = L * B * D, ASV hydrodynamics, stopping distance
-│   ├── ais.js                  # Live AIS data broadcasting, vessel simulation, CPA/TCPA
-│   ├── astar.js                # Stage 1: A* Global Path Search (coarse waypoint route)
+│   ├── ais.js                  # Live AIS Cargo & Mini Ship traffic, lookahead bounce, CPA/TCPA
+│   ├── astar.js                # Stage 1: A* Global Path Search (static + spatiotemporal avoidance)
 │   ├── rrtstar.js              # Stage 2: RRT* Kinematic Refinement (curvature-constrained)
 │   ├── monkeysearch.js         # Stage 3: Somersault Monkey Search (multi-objective SMSO)
 │   ├── curvature.js            # Dubins arc fillet rounding utilities
-│   ├── pipeline.js             # Three-Stage Hybrid Planning Pipeline orchestrator (Fig 3.2)
-│   ├── dynamic.js              # Dynamic hazard manager and reactive collision rerouting
-│   ├── renderer.js             # 500×500 high-DPI canvas renderer with multi-stage layer toggles
-│   └── main.js                 # Application bus, telemetry updater, and benchmark runner
+│   ├── pipeline.js             # Sequential 3-stage orchestrator + zero-collision winner audit
+│   ├── dynamic.js              # Dynamic hazard manager and real-time Path B avoidance rerouting
+│   ├── mapImporter.js          # Offline image & JSON map auto-recognizer with live calibration
+│   ├── renderer.js             # 500×500 high-DPI canvas renderer with live algorithm animations
+│   └── main.js                 # Application bus, entity builder, telemetry, and benchmark runner
 └── python/                     # Python Implementation (Same 3-Stage Architecture)
-    ├── requirements.txt        # Python dependencies (numpy, matplotlib)
-    ├── grid.py                 # Bathymetric grid with EDT and presets
+    ├── requirements.txt        # Python dependencies (numpy, matplotlib, pillow)
+    ├── grid.py                 # Bathymetric grid with EDT, exact clearance, presets & image loader
     ├── ship.py                 # CargoASV model and Ship Domain SS = L * B * D
     ├── ais.py                  # Live AIS traffic broadcasting & CPA/TCPA checks
     ├── astar.py                # Stage 1: A* Global Path Search
     ├── rrtstar.py              # Stage 2: Curvature-constrained RRT* Refinement
     ├── monkeysearch.py         # Stage 3: Somersault Monkey Search Optimization
     ├── curvature.py            # Dubins fillet arc smoothing
-    ├── pipeline.py             # ThreeStageHybridPlanner orchestrator
+    ├── pipeline.py             # ThreeStageHybridPlanner orchestrator & winner selection
     ├── visualizer.py           # Matplotlib visualization engine
-    └── main.py                 # Python benchmark & CLI simulation runner
+    └── main.py                 # Python benchmark & CLI simulation runner (--map supported)
 ```
 
 ---
 
 ## 🎮 Interactive Controls
 
-- **Run 3-Stage Pipeline (⚡)**: Computes Stage 1 A* $\to$ Stage 2 RRT* $\to$ Stage 3 Somersault Monkey Search from Port M to Port N.
+- **▶ Run All 3**: Runs Algorithm 1 (A*), Algorithm 2 (RRT*), and Algorithm 3 (Somersault Monkey Search) sequentially one by one, picks the verified **🏆 OPTIMAL** zero-collision route, and sails from Port M to Port N.
+- **🗑 Clear All**: Clears the entire map, all cargo/mini ships, all dynamic hazards, and all paths back to a blank open sea.
 - **Layer Checkboxes**:
-  - `[x] Stage 1 (A*)`: Toggles dashed amber coarse waypoint route.
-  - `[x] Stage 2 (RRT*)`: Toggles cyan curvature-constrained kinematic route & tree.
-  - `[x] Stage 3 (Monkey)`: Toggles vivid coral final multi-objective ASV path.
+  - `[x] Algo 1 (A*)`: Toggles dashed amber coarse global route.
+  - `[x] Algo 2 (RRT*)`: Toggles cyan curvature-constrained kinematic route.
+  - `[x] Best Optimal`: Toggles glowing vivid ocean blue (`#39A7FF`) selected optimal path.
   - `[x] Ship Domain (SS)`: Toggles $SS = L \times B \times D$ dynamic safety envelope.
-  - `[x] AIS Marine Traffic`: Toggles live other-vessel AIS broadcast labels.
-- **Ports**: Click **🚩 Set Port M** (Departure) or **🎯 Set Port N** (Destination) to reposition terminals.
-- **Spawn AIS Vessel (🚢)**: Injects active commercial traffic with unique MMSI, SOG, and COG into the marine environment.
-- **Benchmark (📊)**: Compares Stage 1 A*, Stage 2 RRT*, Stage 3 SMSO, and the Full 3-Stage Hybrid Pipeline side-by-side.
+  - `[x] AIS Ships, Mini-Ships & Hazards`: Toggles live marine traffic & drifting obstacles.
+- **Upload Map**: Drag/drop a PNG/JPG/JSON chart onto the upload panel to auto-build obstacles, reefs, and ports automatically.
 
 ---
 

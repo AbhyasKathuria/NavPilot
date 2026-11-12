@@ -26,9 +26,10 @@ class AStarPlanner {
   }
 
   /**
-   * Plans path from start to destination considering ship parameters
+   * Plans path from start to destination considering ship parameters,
+   * bathymetric draft, continuous corner clearance, AIS traffic & drifting hazards.
    */
-  plan(start, destination, shipDraft = 12.0, requiredClearanceMeters = 25.0) {
+  plan(start, destination, shipDraft = 12.0, requiredClearanceMeters = 25.0, options = {}) {
     const startTime = performance.now();
 
     const startX = Math.round(start.x);
@@ -36,22 +37,89 @@ class AStarPlanner {
     const destX = Math.round(destination.x);
     const destY = Math.round(destination.y);
 
-    // If start or destination is blocked, return failure immediately
-    if (!this.grid.isPassable(destX, destY, shipDraft, requiredClearanceMeters * 0.5)) {
+    const aisSystem = options.aisSystem || null;
+    const obstacleManager = options.obstacleManager || null;
+    const shipDomainMeters = options.shipDomainMeters || requiredClearanceMeters;
+    const cruiseSpeedCells = Math.max(0.05, options.cruiseSpeedCells || 0.16);
+
+    // Check if start or destination is physically inside solid land or too shallow
+    if (!this.grid.inBounds(destX, destY) ||
+        this.grid.cells[destY][destX] === this.grid.TYPE_LAND ||
+        this.grid.depths[destY][destX] < shipDraft) {
       return {
         success: false,
         path: [],
         explored: [],
         nodesExpanded: 0,
         computeTimeMs: performance.now() - startTime,
-        message: 'Destination is inside an obstacle or shallow zone.'
+        message: 'Destination is inside a land obstacle or shallow shoal.'
       };
     }
 
+    // Attempt full clearance first; if harbor entrance is tight, fallback once cleanly to hull-safe clearance
+    let result = this._runSearch(startX, startY, destX, destY, shipDraft, requiredClearanceMeters, {
+      aisSystem, obstacleManager, shipDomainMeters, cruiseSpeedCells, strictDynamic: true
+    });
+
+    if (!result.targetNode && (aisSystem || obstacleManager)) {
+      result = this._runSearch(startX, startY, destX, destY, shipDraft, requiredClearanceMeters, {
+        aisSystem, obstacleManager, shipDomainMeters, cruiseSpeedCells, strictDynamic: false
+      });
+    }
+
+    if (!result.targetNode && requiredClearanceMeters > 24.0) {
+      // Narrow strait fallback: still enforce strict static hull clearance (> halfBeam), never cut land!
+      const narrowClearance = Math.max(22.0, requiredClearanceMeters * 0.72);
+      result = this._runSearch(startX, startY, destX, destY, shipDraft, narrowClearance, {
+        aisSystem, obstacleManager, shipDomainMeters, cruiseSpeedCells, strictDynamic: false
+      });
+    }
+
+    const computeTimeMs = performance.now() - startTime;
+
+    if (!result.targetNode) {
+      return {
+        success: false,
+        path: [],
+        explored: result.exploredNodes,
+        nodesExpanded: result.closedCount,
+        computeTimeMs,
+        message: 'No feasible collision-free path found.'
+      };
+    }
+
+    // Reconstruct path preserving exact continuous start coordinate if supplied
+    const rawPath = [];
+    let curr = result.targetNode;
+    while (curr) {
+      rawPath.push({ x: curr.x, y: curr.y });
+      curr = curr.parent;
+    }
+    rawPath.reverse();
+    if (Math.hypot(start.x - startX, start.y - startY) > 0.05 &&
+        this.grid.lineOfSight(start.x, start.y, rawPath[0].x, rawPath[0].y, shipDraft, 16.0)) {
+      rawPath[0] = { x: start.x, y: start.y };
+    }
+
+    const metrics = this.evaluatePath(rawPath, shipDraft);
+
+    return {
+      success: true,
+      path: rawPath,
+      explored: result.exploredNodes,
+      nodesExpanded: result.closedCount,
+      computeTimeMs,
+      ...metrics
+    };
+  }
+
+  _runSearch(startX, startY, destX, destY, shipDraft, requiredClearanceMeters, ctx) {
     const openSet = [];
-    const openSetMap = new Map(); // key -> node
+    const openSetMap = new Map();
     const closedSet = new Set();
-    const exploredNodes = [];     // recorded for animation
+    const exploredNodes = [];
+
+    const keyOf = (x, y) => `${x},${y}`;
 
     const startNode = {
       x: startX,
@@ -63,12 +131,9 @@ class AStarPlanner {
     };
     startNode.f = startNode.g + startNode.h;
 
-    const keyOf = (x, y) => `${x},${y}`;
-
     openSet.push(startNode);
     openSetMap.set(keyOf(startX, startY), startNode);
 
-    // 8-direction neighbors
     const directions = [
       { dx: 1, dy: 0, cost: 1.0 },
       { dx: -1, dy: 0, cost: 1.0 },
@@ -83,7 +148,6 @@ class AStarPlanner {
     let targetNode = null;
 
     while (openSet.length > 0) {
-      // Find node with lowest f
       let bestIdx = 0;
       for (let i = 1; i < openSet.length; i++) {
         if (openSet[i].f < openSet[bestIdx].f) {
@@ -98,7 +162,6 @@ class AStarPlanner {
 
       exploredNodes.push({ x: current.x, y: current.y });
 
-      // Goal reached check
       if (current.x === destX && current.y === destY) {
         targetNode = current;
         break;
@@ -113,22 +176,50 @@ class AStarPlanner {
         const nKey = keyOf(nx, ny);
         if (closedSet.has(nKey)) continue;
 
-        // Check if neighbor is passable for ship
-        if (!this.grid.isPassable(nx, ny, shipDraft, requiredClearanceMeters)) {
+        const isGoalOrNearStart =
+          (nx === destX && ny === destY) ||
+          Math.hypot(nx - startX, ny - startY) <= 1.5 ||
+          Math.hypot(nx - destX, ny - destY) <= 1.5;
+
+        const effClearance = isGoalOrNearStart ? Math.min(requiredClearanceMeters, 28.0) : requiredClearanceMeters;
+
+        if (!this.grid.isPassable(nx, ny, shipDraft, effClearance)) {
           continue;
         }
 
-        // Prevent diagonal corner cutting:
-        // If moving diagonally, both adjacent orthogonal cells must be passable
+        // Prevent diagonal corner cutting on land or shallow cells
         if (dir.dx !== 0 && dir.dy !== 0) {
-          const adj1Passable = this.grid.isPassable(current.x + dir.dx, current.y, shipDraft, requiredClearanceMeters);
-          const adj2Passable = this.grid.isPassable(current.x, current.y + dir.dy, shipDraft, requiredClearanceMeters);
-          if (!adj1Passable || !adj2Passable) {
-            continue; // Can't squeeze through pinched corner
+          if (!this.grid.isPassable(current.x + dir.dx, current.y, shipDraft, effClearance * 0.8) ||
+              !this.grid.isPassable(current.x, current.y + dir.dy, shipDraft, effClearance * 0.8)) {
+            continue;
           }
         }
 
-        const tentativeG = current.g + dir.cost;
+        // Spatiotemporal avoidance of stationary/moving AIS vessels & dynamic debris
+        const estDistCells = current.g + dir.cost;
+        const arrivalTimeSec = estDistCells / ctx.cruiseSpeedCells;
+        let dynamicPenalty = 0.0;
+
+        if (ctx.aisSystem && ctx.aisSystem.vessels.length > 0) {
+          const safeAIS = ctx.aisSystem.isSpatiotemporalSafe(nx, ny, arrivalTimeSec, ctx.shipDomainMeters, 15.0);
+          if (!safeAIS) {
+            if (ctx.strictDynamic) continue;
+            dynamicPenalty += 25.0;
+          }
+        }
+        if (ctx.obstacleManager && ctx.obstacleManager.obstacles.length > 0) {
+          const safeObs = ctx.obstacleManager.isSpatiotemporalSafe(nx, ny, arrivalTimeSec, ctx.shipDomainMeters, 12.0);
+          if (!safeObs) {
+            if (ctx.strictDynamic) continue;
+            dynamicPenalty += 25.0;
+          }
+        }
+
+        // Subtle clearance cost gradient: keeps channels comfortably centered away from walls
+        const edgeDist = this.grid.getExactHazardDistanceMeters(nx, ny, shipDraft);
+        const safetyBias = edgeDist < 60.0 ? (60.0 - edgeDist) * 0.015 : 0.0;
+
+        const tentativeG = current.g + dir.cost + dynamicPenalty + safetyBias;
         let neighbor = openSetMap.get(nKey);
 
         if (!neighbor) {
@@ -151,43 +242,15 @@ class AStarPlanner {
       }
     }
 
-    const computeTimeMs = performance.now() - startTime;
-
-    if (!targetNode) {
-      return {
-        success: false,
-        path: [],
-        explored: exploredNodes,
-        nodesExpanded: closedSet.size,
-        computeTimeMs,
-        message: 'No feasible collision-free path found.'
-      };
-    }
-
-    // Reconstruct path
-    const rawPath = [];
-    let curr = targetNode;
-    while (curr) {
-      rawPath.push({ x: curr.x, y: curr.y });
-      curr = curr.parent;
-    }
-    rawPath.reverse();
-
-    // Compute metrics
-    const metrics = this.evaluatePath(rawPath, shipDraft);
-
     return {
-      success: true,
-      path: rawPath,
-      explored: exploredNodes,
-      nodesExpanded: closedSet.size,
-      computeTimeMs,
-      ...metrics
+      targetNode,
+      exploredNodes,
+      closedCount: closedSet.size
     };
   }
 
   /**
-   * Evaluates path metrics: length, smoothness (total turning angle), min clearance
+   * Evaluates path metrics: length, smoothness (total turning angle), exact min clearance
    */
   evaluatePath(path, shipDraft = 12.0) {
     if (!path || path.length < 2) {
@@ -205,12 +268,8 @@ class AStarPlanner {
     let minClearance = Infinity;
 
     for (let i = 0; i < path.length; i++) {
-      const gx = Math.round(path[i].x);
-      const gy = Math.round(path[i].y);
-      if (this.grid.inBounds(gx, gy)) {
-        const d = this.grid.distanceField[gy][gx];
-        if (d < minClearance) minClearance = d;
-      }
+      const d = this.grid.getExactHazardDistanceMeters(path[i].x, path[i].y, shipDraft);
+      if (d < minClearance) minClearance = d;
 
       if (i > 0) {
         lengthCells += Math.hypot(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y);

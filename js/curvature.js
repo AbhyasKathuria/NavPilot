@@ -130,12 +130,7 @@ class CurvatureSmoother {
           curvature: curvature * turnSign
         };
 
-        const gx = Math.round(pt.x);
-        const gy = Math.round(pt.y);
-
-        if (!this.grid.inBounds(gx, gy) ||
-            this.grid.cells[gy][gx] === this.grid.TYPE_LAND ||
-            this.grid.depths[gy][gx] < shipDraft) {
+        if (!this.grid.isPassable(pt.x, pt.y, shipDraft, requiredClearanceMeters)) {
           arcIsSafe = false;
           break;
         }
@@ -143,7 +138,7 @@ class CurvatureSmoother {
         tempArcPoints.push(pt);
       }
 
-      if (arcIsSafe) {
+      if (arcIsSafe && this.grid.lineOfSight(currentPt.x, currentPt.y, arcStart.x, arcStart.y, shipDraft, requiredClearanceMeters)) {
         // 1. Straight segment up to arcStart
         const straightLead = this.interpolateSegment(currentPt, arcStart, 0.35);
         for (let s = 1; s < straightLead.length; s++) {
@@ -155,7 +150,7 @@ class CurvatureSmoother {
         }
         currentPt = arcEnd;
       } else {
-        // Arc cuts into land/shoal! Keep safe straight segments through pCurr without cutting!
+        // Arc cuts near obstacle/clearance zone! Keep verified straight waypoint leg
         const safeLead = this.interpolateSegment(currentPt, pCurr, 0.35);
         for (let s = 1; s < safeLead.length; s++) {
           smoothedPath.push({ ...safeLead[s], heading: angleIn, curvature: 0 });
@@ -172,22 +167,19 @@ class CurvatureSmoother {
       smoothedPath.push({ ...finalLead[s], heading: finalAngle, curvature: 0 });
     }
 
-    // Final verification: Ensure every point has clearance and no obstacle overlap
+    // Final continuous clearance audit across every point
+    const minReqEdge = this.grid.toEdgeClearanceMeters(requiredClearanceMeters);
     let minClearanceFound = Infinity;
     for (let i = 0; i < smoothedPath.length; i++) {
-      const gx = Math.round(smoothedPath[i].x);
-      const gy = Math.round(smoothedPath[i].y);
-      if (!this.grid.inBounds(gx, gy) ||
-          this.grid.cells[gy][gx] === this.grid.TYPE_LAND ||
-          this.grid.depths[gy][gx] < shipDraft) {
+      const edgeDist = this.grid.getExactHazardDistanceMeters(smoothedPath[i].x, smoothedPath[i].y, shipDraft);
+      if (edgeDist < minReqEdge) {
         minClearanceFound = 0;
         break;
       }
-      const d = this.grid.distanceField[gy][gx];
-      if (d < minClearanceFound) minClearanceFound = d;
+      if (edgeDist < minClearanceFound) minClearanceFound = edgeDist;
     }
 
-    // If any point overlapped an obstacle, safely fallback to dense interpolation of waypoints
+    // Strict fallback to unsmoothed collision-free waypoints if any fillet encroached clearance
     if (minClearanceFound === 0) {
       const safeDense = this.interpolateWaypoints(waypoints, 0.35);
       return {

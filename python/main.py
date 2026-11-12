@@ -97,6 +97,8 @@ def main():
     parser = argparse.ArgumentParser(description="NavPilot Three-Stage Hybrid Path-Planning Simulator")
     parser.add_argument("--preset", type=str, default="archipelago", choices=["archipelago", "singapore", "ice_alley", "canal"],
                         help="Maritime chart preset")
+    parser.add_argument("--map", type=str, default=None, help="Optional path map image (.png/.jpg) or exported .json chart to auto-recognize")
+    parser.add_argument("--sensitivity", type=float, default=0.52, help="Obstacle image recognition sensitivity (0.20 - 0.90)")
     parser.add_argument("--length", type=float, default=200.0, help="Ship length (m)")
     parser.add_argument("--beam", type=float, default=32.0, help="Ship beam (m)")
     parser.add_argument("--draft", type=float, default=12.0, help="Ship draft (m)")
@@ -112,9 +114,16 @@ def main():
     print_banner()
 
     # 1. Initialize Bathymetric Grid
-    print(f"[*] Initializing Bathymetric Sea Chart: Preset '{args.preset.upper()}' (50x50 cells, 50m/cell)...")
     grid = BathymetricGrid(50, 50, cell_size_meters=50.0)
-    grid.load_preset(args.preset)
+    if args.map:
+        print(f"[*] Auto-recognizing uploaded map '{args.map}'...")
+        if args.map.lower().endswith(".json"):
+            grid.load_from_json(args.map, ship_draft=args.draft)
+        else:
+            grid.load_from_image(args.map, ship_draft=args.draft, sensitivity=args.sensitivity)
+    else:
+        print(f"[*] Initializing Bathymetric Sea Chart: Preset '{args.preset.upper()}' (50x50 cells, 50m/cell)...")
+        grid.load_preset(args.preset)
 
     # 2. Initialize Cargo ASV
     ship = CargoASV(
@@ -147,6 +156,11 @@ def main():
     # 3. Initialize Live AIS Traffic
     ais_system = AISSystem(grid)
     ais_system.init_default_traffic(args.preset)
+    if args.map:
+        ais_system.vessels = [
+            v for v in ais_system.vessels
+            if grid.in_bounds(v.x, v.y) and grid.cells[int(round(v.y))][int(round(v.x))] == grid.TYPE_SEA
+        ]
     print(f"\n[*] AIS Marine System broadcasting {len(ais_system.vessels)} commercial vessels:")
     for v in ais_system.vessels:
         print(f"    - MMSI {v.mmsi} | {v.name:<20} | Type: {v.type:<16} | SOG: {v.sog:>4.1f} kn | COG: {v.cog:>3.0f}°")
@@ -195,11 +209,13 @@ def main():
     print(f"  -> Hydrodynamic Rudder Energy Index: {result['energy_index']}")
 
     print("\n" + "=" * 90)
-    print("                     ZERO-COLLISION VERIFICATION")
+    print("                     ZERO-COLLISION & OPTIMAL PATH VERIFICATION")
     print("=" * 90)
-    if result['min_clearance_meters'] > 0:
+    winner_name = result.get('winner_name', '3-Stage Hybrid Optimal')
+    print(f" [SELECTED OPTIMAL] {winner_name}")
+    if result.get('collision_free', result['min_clearance_meters'] > 0):
         print(f" [PASS] 100% Collision-Free Route Guaranteed!")
-        print(f"        Minimum clearance to any land obstacle or shallow shoal: {result['min_clearance_meters']:.1f} meters.")
+        print(f"        Minimum continuous hull clearance to nearest obstacle border: {result['min_clearance_meters']:.1f} meters.")
         print(f"        Path stays strictly within deep, navigable maritime bathymetry.")
     else:
         print(f" [FAIL] Path touches hazard boundary.")

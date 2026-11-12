@@ -92,12 +92,12 @@ class ThreeStageHybridPlanner:
                               if stage2_result["success"] and len(stage2_result.get("waypoints", [])) >= 2
                               else coarse_waypoints)
 
-        # Verify Stage 2 line-of-sight
+        # Verify Stage 2 line-of-sight with continuous hull clearance
         is_stage2_safe = True
         for i in range(1, len(feasible_waypoints)):
             if not self.grid.line_of_sight(feasible_waypoints[i - 1]["x"], feasible_waypoints[i - 1]["y"],
                                           feasible_waypoints[i]["x"], feasible_waypoints[i]["y"],
-                                          ship_draft, required_clearance * 0.7):
+                                          ship_draft, required_clearance):
                 is_stage2_safe = False
                 break
         if not is_stage2_safe:
@@ -122,7 +122,7 @@ class ThreeStageHybridPlanner:
         for i in range(1, len(final_waypoints)):
             if not self.grid.line_of_sight(final_waypoints[i - 1]["x"], final_waypoints[i - 1]["y"],
                                           final_waypoints[i]["x"], final_waypoints[i]["y"],
-                                          ship_draft, required_clearance * 0.7):
+                                          ship_draft, required_clearance):
                 is_stage3_safe = False
                 break
         if not is_stage3_safe:
@@ -138,49 +138,83 @@ class ThreeStageHybridPlanner:
             ship.beam
         )
         stage3_time_ms = (time.perf_counter() - stage3_start) * 1000.0
-
         total_compute_time_ms = (time.perf_counter() - start_time) * 1000.0
-        final_path = smooth_result["path"]
 
-        final_metrics = self.evaluate_final_trajectory(final_path, final_waypoints, ship)
+        s1_metrics = self.evaluate_final_trajectory(stage1_result["path"], coarse_waypoints, ship)
+        s2_path = stage2_result.get("path") or self.smoother.interpolate_waypoints(feasible_waypoints, 0.35)
+        s2_metrics = self.evaluate_final_trajectory(s2_path, feasible_waypoints, ship)
+        s3_raw_path = self.smoother.interpolate_waypoints(final_waypoints, 0.35)
+        s3_metrics = self.evaluate_final_trajectory(s3_raw_path, final_waypoints, ship)
+        hybrid_path = smooth_result["path"]
+        hybrid_metrics = self.evaluate_final_trajectory(hybrid_path, final_waypoints, ship)
 
-        # Fallback if clearance is 0
-        if final_metrics["min_clearance_meters"] == 0.0:
-            final_path = self.smoother.interpolate_waypoints(final_waypoints, 0.35)
-            final_metrics = self.evaluate_final_trajectory(final_path, final_waypoints, ship)
+        if not hybrid_metrics["collision_free"]:
+            hybrid_path = s3_raw_path
+            hybrid_metrics = s3_metrics
+
+        candidates = [
+            {"id": "stage1", "name": "Algorithm 1: A* Global Search", "path": stage1_result["path"], "waypoints": coarse_waypoints, **s1_metrics},
+            {"id": "stage2", "name": "Algorithm 2: RRT* Kinematic Refinement", "path": s2_path, "waypoints": feasible_waypoints, **s2_metrics},
+            {"id": "stage3", "name": "Algorithm 3: Somersault Monkey Search", "path": s3_raw_path, "waypoints": final_waypoints, **s3_metrics},
+            {"id": "hybrid", "name": "Combined 3-Stage Hybrid Optimal (Fig 3.2)", "path": hybrid_path, "waypoints": final_waypoints, **hybrid_metrics},
+        ]
+        winner = self.select_optimal_candidate(candidates) or candidates[-1]
 
         self.last_result = {
             "success": True,
-            "path": final_path,
-            "waypoints": final_waypoints,
+            "path": winner["path"],
+            "waypoints": winner["waypoints"],
+            "winner_id": winner["id"],
+            "winner_name": winner["name"],
             "stage1": {
                 "path": stage1_result["path"],
                 "waypoints": coarse_waypoints,
                 "nodes_expanded": stage1_result["nodes_expanded"],
                 "compute_time_ms": stage1_time_ms,
-                "length_meters": stage1_result["length_meters"]
+                **s1_metrics
             },
             "stage2": {
-                "path": stage2_result.get("path") or self.smoother.interpolate_waypoints(feasible_waypoints, 0.4),
+                "path": s2_path,
                 "waypoints": feasible_waypoints,
                 "tree": stage2_result.get("tree", []),
                 "compute_time_ms": stage2_time_ms,
-                "length_meters": stage2_result.get("length_meters", 0.0)
+                **s2_metrics
             },
             "stage3": {
-                "path": final_path,
+                "path": hybrid_path,
                 "waypoints": final_waypoints,
                 "compute_time_ms": stage3_time_ms,
-                "length_meters": final_metrics["length_meters"],
-                "smoothness_deg": final_metrics["smoothness_deg"],
-                "energy_index": stage3_result.get("energy_index", final_metrics["energy_index"]),
-                "transit_time_sec": final_metrics["transit_time_sec"]
+                **hybrid_metrics
             },
             "compute_time_ms": total_compute_time_ms,
-            **final_metrics
+            **{k: v for k, v in winner.items() if k in ("length_cells", "length_meters", "smoothness_deg", "min_clearance_meters", "curvature_violations", "transit_time_sec", "energy_index", "collision_free")}
         }
 
         return self.last_result
+
+    def select_optimal_candidate(self, candidates: List[Dict]) -> Optional[Dict]:
+        safe = [c for c in candidates if c.get("collision_free")]
+        if not safe:
+            return None
+        min_len = min(c["length_meters"] for c in safe)
+        max_len = max(min_len + 1.0, max(c["length_meters"] for c in safe))
+        max_turn = max(1.0, max(c["smoothness_deg"] for c in safe))
+        max_clear = max(1.0, max(c["min_clearance_meters"] for c in safe))
+
+        best = safe[0]
+        best_score = float("inf")
+        for c in safe:
+            norm_len = (c["length_meters"] - min_len) / max(1.0, max_len - min_len)
+            norm_turn = c["smoothness_deg"] / max_turn
+            clear_reward = c["min_clearance_meters"] / max_clear
+            energy_pen = min(2.0, float(c.get("energy_index", 0.0)) / 100.0)
+            stair_pen = 0.15 if c["id"] == "stage1" else 0.0
+            score = (norm_len * 0.40) + (norm_turn * 0.30) + (energy_pen * 0.15) - (clear_reward * 0.20) + stair_pen
+            c["optimality_score"] = round(score, 4)
+            if score < best_score:
+                best_score = score
+                best = c
+        return best
 
     def extract_coarse_waypoints(self, dense_path: List[Dict[str, float]], ship_draft: float, required_clearance: float) -> List[Dict[str, float]]:
         """
@@ -213,7 +247,9 @@ class ThreeStageHybridPlanner:
     def evaluate_final_trajectory(self, path: List[Dict[str, float]], waypoints: List[Dict[str, float]], ship) -> Dict:
         length_cells = 0.0
         min_clearance = float("inf")
+        collision_free = bool(path and len(path) >= 2)
         ship_draft = ship.draft
+        min_req_hull = min(18.0, ship.beam * 0.45)
 
         for i, pt in enumerate(path):
             gx = int(round(pt["x"]))
@@ -223,13 +259,29 @@ class ThreeStageHybridPlanner:
                 self.grid.cells[gy][gx] == self.grid.TYPE_LAND or
                 self.grid.depths[gy][gx] < ship_draft):
                 min_clearance = 0.0
+                collision_free = False
             else:
-                d = self.grid.distance_field[gy][gx]
+                d = self.grid.get_exact_hazard_distance_meters(pt["x"], pt["y"], ship_draft)
                 if d < min_clearance:
                     min_clearance = d
+                if 1 <= i <= len(path) - 2 and d < min_req_hull * 0.8:
+                    collision_free = False
 
             if i > 0:
-                length_cells += math.hypot(pt["x"] - path[i - 1]["x"], pt["y"] - path[i - 1]["y"])
+                prev = path[i - 1]
+                seg_len = math.hypot(pt["x"] - prev["x"], pt["y"] - prev["y"])
+                if seg_len > 0.4:
+                    steps = max(2, math.ceil(seg_len / 0.25))
+                    for s in range(1, steps):
+                        u = s / steps
+                        sx = prev["x"] + (pt["x"] - prev["x"]) * u
+                        sy = prev["y"] + (pt["y"] - prev["y"]) * u
+                        sd = self.grid.get_exact_hazard_distance_meters(sx, sy, ship_draft)
+                        if sd < min_clearance:
+                            min_clearance = sd
+                        if sd < min_req_hull * 0.8:
+                            collision_free = False
+                length_cells += seg_len
 
         total_turning_rad = 0.0
         energy_est = 0.0
@@ -258,5 +310,6 @@ class ThreeStageHybridPlanner:
             "min_clearance_meters": 0.0 if min_clearance == float("inf") else min_clearance,
             "curvature_violations": 0,
             "transit_time_sec": transit_time_sec,
-            "energy_index": round(energy_est, 1)
+            "energy_index": round(energy_est, 1),
+            "collision_free": collision_free
         }

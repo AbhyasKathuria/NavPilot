@@ -31,10 +31,21 @@ class MaritimeRenderer {
     this.showShipDomain = true;   // Ship Domain SS = L * B * D
     this.showAISTraffic = true;   // AIS Vessels & Broadcast Tags
 
-    // Explored nodes animation state
+    // Sequential Solver Animation States
     this.exploredAnimationQueue = [];
     this.animatedExploredIndex = 0;
     this.isAnimatingExploration = false;
+
+    this.rrtTreeEdges = [];
+    this.animatedRrtIndex = 0;
+    this.isAnimatingRrt = false;
+
+    this.monkeyAnimPaths = [];
+    this.monkeyAnimIdx = 0;
+    this.isAnimatingMonkey = false;
+
+    this.solverStatusBanner = ''; // e.g., 'Computing 1/3: A*...', 'Computing 2/3: RRT*...'
+    this.placementPreview = null; // { startX, startY, endX, endY, tool }
 
     // Coordinate hover HUD
     this.hoverCoord = null;
@@ -54,11 +65,41 @@ class MaritimeRenderer {
     this.hoverCoord = (x >= 0 && x < this.grid.cols && y >= 0 && y < this.grid.rows) ? { x, y } : null;
   }
 
+  setPlacementPreview(preview) {
+    this.placementPreview = preview;
+  }
+
+  clearAllAnimations() {
+    this.exploredAnimationQueue = [];
+    this.animatedExploredIndex = 0;
+    this.isAnimatingExploration = false;
+    this.rrtTreeEdges = [];
+    this.animatedRrtIndex = 0;
+    this.isAnimatingRrt = false;
+    this.monkeyAnimPaths = [];
+    this.monkeyAnimIdx = 0;
+    this.isAnimatingMonkey = false;
+    this.solverStatusBanner = '';
+    this.placementPreview = null;
+  }
+
   startExplorationAnimation(exploredNodes, onComplete) {
     this.exploredAnimationQueue = exploredNodes || [];
     this.animatedExploredIndex = 0;
     this.isAnimatingExploration = true;
     this.onExplorationComplete = onComplete;
+  }
+
+  startRrtTreeAnimation(treeEdges) {
+    this.rrtTreeEdges = treeEdges || [];
+    this.animatedRrtIndex = 0;
+    this.isAnimatingRrt = true;
+  }
+
+  startMonkeyAnimation(iterationHistory) {
+    this.monkeyAnimPaths = iterationHistory || [];
+    this.monkeyAnimIdx = 0;
+    this.isAnimatingMonkey = true;
   }
 
   render(deltaTime = 0.016) {
@@ -73,32 +114,39 @@ class MaritimeRenderer {
     // 2. Straight-Line Range Vector between Port M & Port N
     this.drawPortRangeVector(ctx);
 
-    // 3. Explored Nodes Wavefront (Stage 1 A* animation)
+    // 3. Stage 1 A* Explored Nodes Wavefront & Stage 2 RRT* Tree Branches
     this.drawExploredNodes(ctx);
+    this.drawRrtTree(ctx);
 
-    // 4. Three-Stage Hybrid Pipeline Routes
+    // 4. Three-Stage Hybrid Pipeline Routes & Stage 3 Monkey Convergence
     this.drawThreeStageRoutes(ctx);
+    this.drawMonkeyAnimation(ctx);
 
-    // 5. AIS Marine Traffic (Other Vessels)
+    // 5. AIS Marine Traffic (Cargo Ships & Mini Ships)
     if (this.showAISTraffic && this.aisSystem) {
       this.drawAISTraffic(ctx);
     }
 
-    // 6. Dynamic Obstacles (if any legacy debris/icebergs)
+    // 6. Dynamic Obstacles (Icebergs / Drifting Debris)
     if (this.obstacleManager) {
       this.drawDynamicObstacles(ctx);
     }
 
-    // 7. Cargo ASV Ship, Domain (SS = L * B * D), Rudder & Heading
+    // 7. Interactive Placement Aim Vector Preview
+    if (this.placementPreview) {
+      this.drawPlacementPreview(ctx);
+    }
+
+    // 8. Cargo ASV Ship, Domain (SS = L * B * D), Rudder & Heading
     this.drawShipAndDomain(ctx);
 
-    // 8. Port M (Departure) & Port N (Destination) Markers
+    // 9. Port M (Departure) & Port N (Destination) Markers
     this.drawPorts(ctx);
 
-    // 9. Alert Banners (Replanning, Collision Alert, Arrived)
+    // 10. Alert Banners & Sequential Solver Status
     this.drawBanners(ctx);
 
-    // 10. Hover Bathymetry / AIS Inspector HUD
+    // 11. Hover Bathymetry Inspector HUD
     this.drawHoverHUD(ctx);
   }
 
@@ -222,7 +270,7 @@ class MaritimeRenderer {
     if (this.isAnimatingExploration) {
       this.animatedExploredIndex = Math.min(
         this.exploredAnimationQueue.length,
-        this.animatedExploredIndex + 30
+        this.animatedExploredIndex + 36
       );
       if (this.animatedExploredIndex >= this.exploredAnimationQueue.length) {
         this.isAnimatingExploration = false;
@@ -238,8 +286,80 @@ class MaritimeRenderer {
       const cx = (node.x + 0.5) * this.cellSize;
       const cy = (node.y + 0.5) * this.cellSize;
       ctx.beginPath();
-      ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 1.6, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  /**
+   * Animates Algorithm 2 (RRT* Kinematic Tree Expansion)
+   */
+  drawRrtTree(ctx) {
+    if (!this.rrtTreeEdges || this.rrtTreeEdges.length === 0) return;
+
+    if (this.isAnimatingRrt) {
+      this.animatedRrtIndex = Math.min(this.rrtTreeEdges.length, this.animatedRrtIndex + 6);
+      if (this.animatedRrtIndex >= this.rrtTreeEdges.length) {
+        this.isAnimatingRrt = false;
+      }
+    }
+
+    const count = this.isAnimatingRrt ? this.animatedRrtIndex : this.rrtTreeEdges.length;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(2, 132, 199, 0.42)';
+    ctx.lineWidth = 1.0;
+    ctx.beginPath();
+    for (let i = 0; i < count; i++) {
+      const edge = this.rrtTreeEdges[i];
+      ctx.moveTo((edge.from.x + 0.5) * this.cellSize, (edge.from.y + 0.5) * this.cellSize);
+      ctx.lineTo((edge.to.x + 0.5) * this.cellSize, (edge.to.y + 0.5) * this.cellSize);
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(2, 132, 199, 0.65)';
+    for (let i = 0; i < count; i++) {
+      const edge = this.rrtTreeEdges[i];
+      ctx.fillRect((edge.to.x + 0.5) * this.cellSize - 1, (edge.to.y + 0.5) * this.cellSize - 1, 2, 2);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Animates Algorithm 3 (Somersault Monkey Search Candidate Convergence)
+   */
+  drawMonkeyAnimation(ctx) {
+    if (!this.isAnimatingMonkey || !this.monkeyAnimPaths || this.monkeyAnimPaths.length === 0) return;
+
+    this.monkeyAnimIdx = Math.min(this.monkeyAnimPaths.length - 1, this.monkeyAnimIdx + 0.25);
+    const frameIdx = Math.floor(this.monkeyAnimIdx);
+    const activeWps = this.monkeyAnimPaths[frameIdx];
+
+    if (activeWps && activeWps.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(57, 167, 255, 0.85)';
+      ctx.lineWidth = 2.6;
+      ctx.setLineDash([6, 3]);
+      ctx.beginPath();
+      ctx.moveTo((activeWps[0].x + 0.5) * this.cellSize, (activeWps[0].y + 0.5) * this.cellSize);
+      for (let i = 1; i < activeWps.length; i++) {
+        ctx.lineTo((activeWps[i].x + 0.5) * this.cellSize, (activeWps[i].y + 0.5) * this.cellSize);
+      }
+      ctx.stroke();
+
+      ctx.fillStyle = '#FFEED9';
+      ctx.strokeStyle = '#0A2540';
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < activeWps.length; i++) {
+        ctx.beginPath();
+        ctx.arc((activeWps[i].x + 0.5) * this.cellSize, (activeWps[i].y + 0.5) * this.cellSize, 3.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (this.monkeyAnimIdx >= this.monkeyAnimPaths.length - 1) {
+      this.isAnimatingMonkey = false;
     }
   }
 
@@ -301,9 +421,9 @@ class MaritimeRenderer {
     }
 
     // -------------------------------------------------------------
-    // STAGE 3: Somersault Monkey Search Final Route (Vivid Ocean Blue)
+    // OPTIMAL / STAGE 3 ROUTE: Verified Best Optimal Path (Vivid Ocean Blue)
     // -------------------------------------------------------------
-    const finalRoute = this.ship.stage3Path || this.ship.originalPath;
+    const finalRoute = this.ship.originalPath || this.ship.stage3Path;
     if (this.showStage3 && finalRoute && finalRoute.length > 1) {
       ctx.save();
       if (this.ship.hasReplanned) {
@@ -465,7 +585,7 @@ class MaritimeRenderer {
   }
 
   /**
-   * Draws AIS marine traffic
+   * Draws AIS marine traffic (Cargo Ships & Mini Ships)
    */
   drawAISTraffic(ctx) {
     const vessels = this.aisSystem.vessels;
@@ -474,75 +594,117 @@ class MaritimeRenderer {
       const v = vessels[i];
       const px = (v.x + 0.5) * this.cellSize;
       const py = (v.y + 0.5) * this.cellSize;
-      const halfLenPx = ((v.length / 2.0) / 50.0) * this.cellSize;
-      const halfBmPx = ((v.beam / 2.0) / 50.0) * this.cellSize;
+      const isMini = v.vesselCategory === 'mini';
+      const halfLenPx = Math.max(isMini ? 4.5 : 8.5, ((v.length / 2.0) / 50.0) * this.cellSize);
+      const halfBmPx = Math.max(isMini ? 2.2 : 3.2, ((v.beam / 2.0) / 50.0) * this.cellSize);
+
+      // Wake trail for moving ships
+      if (v.trail && v.trail.length > 1) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+        ctx.lineWidth = isMini ? 1.0 : 1.4;
+        ctx.beginPath();
+        for (let t = 0; t < v.trail.length; t++) {
+          const tx = (v.trail[t].x + 0.5) * this.cellSize;
+          const ty = (v.trail[t].y + 0.5) * this.cellSize;
+          if (t === 0) ctx.moveTo(tx, ty);
+          else ctx.lineTo(tx, ty);
+        }
+        ctx.stroke();
+        ctx.restore();
+      }
 
       // Predicted AIS forward track
-      ctx.save();
-      ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = v.riskLevel === 'COLLISION_ALERT' ? '#DC2626' : 'rgba(57, 167, 255, 0.6)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(px, py);
-      for (let t = 2; t <= 18; t += 3) {
-        const pred = v.predictPosition(t);
-        ctx.lineTo((pred.x + 0.5) * this.cellSize, (pred.y + 0.5) * this.cellSize);
+      if (v.sog > 0.2) {
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = v.riskLevel === 'COLLISION_ALERT' ? '#DC2626' : (isMini ? 'rgba(2, 132, 199, 0.55)' : 'rgba(57, 167, 255, 0.65)');
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        for (let t = 2; t <= 18; t += 3) {
+          const pred = v.predictPosition(t, this.grid);
+          ctx.lineTo((pred.x + 0.5) * this.cellSize, (pred.y + 0.5) * this.cellSize);
+        }
+        ctx.stroke();
+        ctx.restore();
       }
-      ctx.stroke();
-      ctx.restore();
 
-      // AIS Vessel Hull
+      // Vessel Hull oriented accurately to compass heading (0=North=-PI/2 in canvas)
       ctx.save();
       ctx.translate(px, py);
-      ctx.rotate((v.cog * Math.PI) / 180.0);
+      ctx.rotate(((v.cog - 90) * Math.PI) / 180.0);
 
-      // Color code by risk
       if (v.riskLevel === 'COLLISION_ALERT') {
         ctx.fillStyle = '#EF4444';
         ctx.strokeStyle = '#991B1B';
       } else if (v.riskLevel === 'WARNING') {
         ctx.fillStyle = '#F59E0B';
         ctx.strokeStyle = '#78350F';
+      } else if (isMini) {
+        ctx.fillStyle = '#FFEED9';
+        ctx.strokeStyle = '#0284C7';
       } else {
-        ctx.fillStyle = '#39A7FF'; // Vibrant Ocean Blue AIS vessel
+        ctx.fillStyle = '#39A7FF';
         ctx.strokeStyle = '#0A2540';
       }
 
+      ctx.lineWidth = 1.3;
       ctx.beginPath();
-      ctx.moveTo(halfLenPx * 1.2, 0);
-      ctx.lineTo(halfLenPx * 0.7, halfBmPx);
-      ctx.lineTo(-halfLenPx, halfBmPx);
-      ctx.lineTo(-halfLenPx, -halfBmPx);
-      ctx.lineTo(halfLenPx * 0.7, -halfBmPx);
+      if (isMini) {
+        // Pointed speed/patrol mini-vessel silhouette
+        ctx.moveTo(halfLenPx * 1.3, 0);
+        ctx.lineTo(-halfLenPx * 0.8, halfBmPx);
+        ctx.lineTo(-halfLenPx, 0);
+        ctx.lineTo(-halfLenPx * 0.8, -halfBmPx);
+      } else {
+        // Full cargo vessel hull
+        ctx.moveTo(halfLenPx * 1.2, 0);
+        ctx.lineTo(halfLenPx * 0.7, halfBmPx);
+        ctx.lineTo(-halfLenPx, halfBmPx);
+        ctx.lineTo(-halfLenPx, -halfBmPx);
+        ctx.lineTo(halfLenPx * 0.7, -halfBmPx);
+      }
       ctx.closePath();
       ctx.fill();
       ctx.stroke();
 
-      // Velocity arrow
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(halfLenPx * 1.8, 0);
-      ctx.stroke();
+      // Cabin / cargo detail
+      if (!isMini) {
+        ctx.fillStyle = '#FFEED9';
+        ctx.fillRect(-halfLenPx * 0.45, -halfBmPx * 0.55, halfLenPx * 0.8, halfBmPx * 1.1);
+      }
+
+      // Bow heading vector if underway
+      if (v.sog > 0.2) {
+        ctx.strokeStyle = isMini ? '#0284C7' : '#FFFFFF';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(halfLenPx * 0.5, 0);
+        ctx.lineTo(halfLenPx * 1.9, 0);
+        ctx.stroke();
+      }
 
       ctx.restore();
 
-      // AIS Broadcast Tag Pill (MMSI & SOG)
+      // Tag Pill (Name / Type & SOG)
       ctx.save();
-      ctx.font = 'bold 8px "Inter", sans-serif';
-      const label = `${v.name.split(' ')[0]} | ${v.sog.toFixed(1)}kn`;
+      ctx.font = 'bold 7.5px "Inter", sans-serif';
+      const prefix = isMini ? '🚤 ' : '';
+      const shortName = v.name.split(' ')[0];
+      const sogTag = v.sog <= 0.1 ? 'ANCHOR' : `${v.sog.toFixed(0)}kn`;
+      const label = `${prefix}${shortName} | ${sogTag}`;
       const textW = ctx.measureText(label).width;
       ctx.fillStyle = '#FFEED9';
-      ctx.strokeStyle = '#87C4FF';
-      ctx.lineWidth = 1.2;
-      ctx.fillRect(px - textW / 2 - 3, py - 18, textW + 6, 12);
-      ctx.strokeRect(px - textW / 2 - 3, py - 18, textW + 6, 12);
+      ctx.strokeStyle = v.riskLevel === 'COLLISION_ALERT' ? '#DC2626' : '#87C4FF';
+      ctx.lineWidth = 1.1;
+      ctx.fillRect(px - textW / 2 - 3, py - 18, textW + 6, 11);
+      ctx.strokeRect(px - textW / 2 - 3, py - 18, textW + 6, 11);
 
       ctx.fillStyle = '#0A2540';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(label, px, py - 12);
+      ctx.fillText(label, px, py - 12.5);
       ctx.restore();
     }
   }
@@ -555,14 +717,28 @@ class MaritimeRenderer {
       const obs = obstacles[i];
       const px = (obs.x + 0.5) * this.cellSize;
       const py = (obs.y + 0.5) * this.cellSize;
-      const rPx = (obs.radiusMeters / 50.0) * this.cellSize;
+      const rPx = Math.max(5.5, (obs.radiusMeters / 50.0) * this.cellSize);
+
+      // Drift vector prediction line
+      if (Math.hypot(obs.vx, obs.vy) > 0.01) {
+        ctx.save();
+        ctx.setLineDash([2, 3]);
+        ctx.strokeStyle = 'rgba(220, 38, 38, 0.55)';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        const pred = obs.predictPosition(14, this.grid);
+        ctx.lineTo((pred.x + 0.5) * this.cellSize, (pred.y + 0.5) * this.cellSize);
+        ctx.stroke();
+        ctx.restore();
+      }
 
       ctx.save();
       ctx.translate(px, py);
       if (obs.type === 'iceberg') {
-        ctx.fillStyle = '#E0F4FF';
+        ctx.fillStyle = '#FFFFFF';
         ctx.strokeStyle = '#39A7FF';
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1.6;
         ctx.beginPath();
         ctx.moveTo(0, -rPx);
         ctx.lineTo(rPx * 0.9, -rPx * 0.4);
@@ -572,14 +748,54 @@ class MaritimeRenderer {
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-      } else if (obs.type === 'debris') {
+      } else {
         ctx.fillStyle = '#FFEED9';
-        ctx.strokeStyle = '#0A2540';
-        ctx.fillRect(-rPx * 0.7, -rPx * 0.4, rPx * 1.4, rPx * 0.8);
-        ctx.strokeRect(-rPx * 0.7, -rPx * 0.4, rPx * 1.4, rPx * 0.8);
+        ctx.strokeStyle = '#DC2626';
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(-rPx * 0.7, -rPx * 0.45, rPx * 1.4, rPx * 0.9);
+        ctx.strokeRect(-rPx * 0.7, -rPx * 0.45, rPx * 1.4, rPx * 0.9);
       }
       ctx.restore();
     }
+  }
+
+  /**
+   * Renders live heading / vector preview when click-dragging to place ships/hazards
+   */
+  drawPlacementPreview(ctx) {
+    const p = this.placementPreview;
+    if (!p) return;
+
+    const sx = (p.startX + 0.5) * this.cellSize;
+    const sy = (p.startY + 0.5) * this.cellSize;
+    const ex = (p.endX + 0.5) * this.cellSize;
+    const ey = (p.endY + 0.5) * this.cellSize;
+
+    ctx.save();
+    ctx.strokeStyle = '#0A2540';
+    ctx.fillStyle = 'rgba(57, 167, 255, 0.35)';
+    ctx.lineWidth = 2.0;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(sx, sy, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.setLineDash([]);
+    ctx.stroke();
+
+    const dx = ex - sx;
+    const dy = ey - sy;
+    if (Math.hypot(dx, dy) > 8) {
+      const cog = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+      ctx.font = 'bold 9.5px "Inter", sans-serif';
+      ctx.fillStyle = '#0A2540';
+      ctx.fillText(`Course: ${cog.toFixed(0)}°`, ex + 8, ey - 6);
+    }
+    ctx.restore();
   }
 
   /**
@@ -592,19 +808,17 @@ class MaritimeRenderer {
     const dy = (this.grid.destination.y + 0.5) * this.cellSize;
 
     // Port M: Departure Port (Green Harbor Quay)
-    this.drawPortMarker(ctx, sx, sy, '#16A34A', 'PORT M (Departure)', `(${this.grid.start.x}, ${this.grid.start.y})`);
+    this.drawPortMarker(ctx, sx, sy, '#16A34A', 'PORT M', `(${this.grid.start.x}, ${this.grid.start.y})`);
 
     // Port N: Destination Port (Red Harbor Quay)
-    this.drawPortMarker(ctx, dx, dy, '#DC2626', 'PORT N (Destination)', `(${this.grid.destination.x}, ${this.grid.destination.y})`);
+    this.drawPortMarker(ctx, dx, dy, '#DC2626', 'PORT N', `(${this.grid.destination.x}, ${this.grid.destination.y})`);
   }
 
   drawPortMarker(ctx, x, y, color, title, coords) {
     ctx.save();
-    // Harbor Pier Structure
     ctx.fillStyle = '#334155';
     ctx.fillRect(x - 6, y + 4, 12, 4);
 
-    // Flag Pole
     ctx.strokeStyle = '#0A2540';
     ctx.lineWidth = 2.0;
     ctx.beginPath();
@@ -612,7 +826,6 @@ class MaritimeRenderer {
     ctx.lineTo(x, y - 18);
     ctx.stroke();
 
-    // Port Banner Flag
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.moveTo(x, y - 18);
@@ -621,7 +834,6 @@ class MaritimeRenderer {
     ctx.closePath();
     ctx.fill();
 
-    // Port Label Badge
     ctx.font = 'bold 9px "Inter", sans-serif';
     const label = `${title} ${coords}`;
     const textW = ctx.measureText(label).width;
@@ -640,25 +852,27 @@ class MaritimeRenderer {
   }
 
   drawBanners(ctx) {
-    if (this.ship.hasReplanned && this.obstacleManager && this.obstacleManager.isReplanning) {
-      this.renderBanner(ctx, '⚠️ DYNAMIC REROUTE ACTIVE: AVOIDING AIS TRAFFIC (PATH B)', '#FFEED9', '#B91C1C');
+    if (this.solverStatusBanner) {
+      this.renderBanner(ctx, this.solverStatusBanner, '#FFEED9', '#0A2540');
+    } else if (this.ship.hasReplanned && this.obstacleManager && this.obstacleManager.isReplanning) {
+      this.renderBanner(ctx, '⚠️ DYNAMIC REROUTE ACTIVE: AVOIDING TRAFFIC (PATH B)', '#FFEED9', '#B91C1C');
     } else if (this.ship.state === 'HOLD_WAIT') {
-      this.renderBanner(ctx, '⏸ HOLD & WAIT MANOEUVRE (REVERSE THRUST)', '#FFEED9', '#B45309');
+      this.renderBanner(ctx, '⏸ HOLD & WAIT MANOEUVRE (PROXIMITY SHIELD)', '#FFEED9', '#B45309');
     } else if (this.ship.state === 'EMERGENCY_STOP') {
-      this.renderBanner(ctx, '⛔ EMERGENCY SAFE STOP (PASSAGE BLOCKED)', '#FEE2E2', '#991B1B');
+      this.renderBanner(ctx, '⛔ EMERGENCY SAFE STOP (NO CLEAR PASSAGE)', '#FEE2E2', '#991B1B');
     } else if (this.ship.state === 'ARRIVED') {
-      this.renderBanner(ctx, '🏁 DESTINATION PORT N REACHED SAFELY', '#E0F4FF', '#15803D');
+      this.renderBanner(ctx, '🏁 DESTINATION PORT N REACHED SAFELY (0 COLLISIONS)', '#E0F4FF', '#15803D');
     }
   }
 
   renderBanner(ctx, text, bgColor, textColor) {
     ctx.save();
-    ctx.font = 'bold 11px "Inter", sans-serif';
+    ctx.font = 'bold 10.5px "Inter", sans-serif';
     const textW = ctx.measureText(text).width;
-    const bannerW = textW + 28;
+    const bannerW = Math.min(480, textW + 28);
     const bannerH = 26;
     const bx = (500 - bannerW) / 2;
-    const by = 14;
+    const by = 12;
 
     ctx.fillStyle = bgColor;
     ctx.strokeStyle = '#39A7FF';
@@ -678,13 +892,13 @@ class MaritimeRenderer {
     const { x, y } = this.hoverCoord;
     const type = this.grid.cells[y][x];
     const depth = this.grid.depths[y][x];
-    const clearance = this.grid.distanceField[y][x];
+    const edgeDist = this.grid.getExactHazardDistanceMeters(x, y, this.ship.draft);
 
     let typeStr = 'Deep Sea';
     if (type === this.grid.TYPE_LAND) typeStr = 'Land Obstacle';
     else if (type === this.grid.TYPE_SHALLOW) typeStr = 'Shoal Reef';
 
-    const text = `Cell [${x}, ${y}] | Depth: ${depth.toFixed(1)}m | Hazard Dist: ${clearance.toFixed(0)}m | ${typeStr}`;
+    const text = `Cell [${x}, ${y}] | Depth: ${depth.toFixed(1)}m | Edge Clear: ${edgeDist.toFixed(0)}m | ${typeStr}`;
 
     ctx.save();
     ctx.font = '10px "Inter", sans-serif';

@@ -13,13 +13,13 @@
       <div class="brand-icon">🚢</div>
       <div>
         <h1 class="app-title">NavPilot: Three-Stage Hybrid Path-Planning Architecture</h1>
-        <p class="app-subtitle">Stage 1: A* Global (Grid) ➔ Stage 2: RRT* Kinematic (Curvature) ➔ Stage 3: Somersault Monkey Search (Multi-Objective) | Chart & AIS Data | Ship Domain SS = L × B × D</p>
+        <p class="app-subtitle">Algorithm 1: A* Global ➔ Algorithm 2: RRT* Kinematic ➔ Algorithm 3: Somersault Monkey Search ➔ Optimal Collision-Free ASV Navigation</p>
       </div>
     </div>
     <div class="header-status-group">
       <div class="status-pill">
-        <span class="status-indicator"></span>
-        <span>Real-Time AIS & Navigation Engine</span>
+        <span class="status-indicator" id="engineStatusDot"></span>
+        <span id="engineStatusText">Real-Time AIS & Navigation Engine</span>
       </div>
       <a href="https://github.com/AbhyasKathuria/NavPilot" target="_blank" rel="noopener noreferrer" class="repo-link">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
@@ -32,7 +32,7 @@
 
   <!-- Main 3-Column Layout -->
   <main class="main-layout">
-    <!-- Column 1: Controls & Three-Stage Architecture -->
+    <!-- Column 1: Controls, Map Importer, Entity Builder & Three-Stage Pipeline -->
     <section class="controls-column">
       <!-- Simulation Execution Card -->
       <div class="panel-card">
@@ -42,7 +42,7 @@
         </div>
         <div class="panel-body">
           <div class="sim-actions-grid">
-            <button id="btnRun" class="btn btn-primary">▶ Run</button>
+            <button id="btnRun" class="btn btn-primary">▶ Run All 3</button>
             <button id="btnPause" class="btn">⏸ Pause</button>
             <button id="btnReset" class="btn">🔄 Reset</button>
           </div>
@@ -54,64 +54,184 @@
             </div>
           </div>
 
-          <div style="display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 8px;">
-            <button id="btnRunPipeline" class="btn btn-block" style="background-color: var(--color-rose); border-color: var(--border-strong);">
-              ⚡ Run 3-Stage Hybrid Pipeline
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px;">
+            <button id="btnRunPipeline" class="btn" style="background-color: var(--color-sand); border-color: var(--border-strong);">
+              ⚡ Calc 3 Algos
             </button>
-            <button id="btnBenchmark" class="btn btn-block" style="background-color: var(--color-peach);">
-              📊 Benchmark All Algorithms
+            <button id="btnBenchmark" class="btn" style="background-color: var(--color-sand);">
+              📊 Compare All
             </button>
           </div>
         </div>
       </div>
 
-      <!-- Three-Stage Hybrid Pipeline Flowchart Card -->
+      <!-- Path Map Upload & Auto-Recognition Card -->
       <div class="panel-card">
         <div class="panel-header">
-          <span>Three-Stage Hybrid Architecture (Fig 3.2)</span>
+          <span>Upload Path Map (Auto-Recognize)</span>
+          <button id="btnExportMap" class="btn" style="padding: 2px 6px; font-size: 9px;" title="Save current chart as JSON">💾 Export</button>
+        </div>
+        <div class="panel-body">
+          <div id="mapDropZone" class="upload-drop-zone">
+            <input type="file" id="mapFileInput" accept="image/*,.json" hidden>
+            <div class="upload-icon">🗺️</div>
+            <div class="upload-title">Drop Map Image Here or <span class="upload-browse">Browse</span></div>
+            <div class="upload-hint">Auto-detects obstacles, shoals &amp; ports (PNG, JPG, Sketch, JSON)</div>
+          </div>
+
+          <!-- Recognition Calibration & Preview (visible once an image is uploaded) -->
+          <div id="mapImportPreviewBox" class="import-preview-box" style="display: none;">
+            <div class="preview-thumbnails">
+              <div class="thumb-col">
+                <span class="thumb-label">Uploaded Map</span>
+                <img id="imgUploadThumb" alt="Uploaded source map">
+              </div>
+              <div class="thumb-col">
+                <span class="thumb-label">Recognized Sea Grid</span>
+                <canvas id="canvasRecognizedPreview" width="120" height="120"></canvas>
+              </div>
+            </div>
+
+            <div class="import-stats-pill" id="importStatsSummary">Recognized map ready.</div>
+
+            <div class="param-grid" style="margin-top: 6px;">
+              <div class="param-item" style="grid-column: 1 / -1;">
+                <label for="importModeSelect">Detection Mode</label>
+                <select id="importModeSelect" class="form-control" style="padding: 3px 6px; font-size: 10px;">
+                  <option value="auto">Auto Smart Detect (Recommended)</option>
+                  <option value="dark_obstacles">Dark Obstacles on Light Background</option>
+                  <option value="light_obstacles">Light Obstacles on Dark Background</option>
+                  <option value="maritime_chart">Maritime Chart (Blue Sea / Land / Shoal)</option>
+                </select>
+              </div>
+              <div class="param-item" style="grid-column: 1 / -1;">
+                <label for="importSensitivity">Obstacle Sensitivity: <span id="importSensVal">52%</span></label>
+                <input type="range" id="importSensitivity" min="0.20" max="0.90" step="0.04" value="0.52">
+              </div>
+            </div>
+
+            <div class="import-toggles-row">
+              <label class="layer-toggle-label">
+                <input type="checkbox" id="chkDetectPorts" checked>
+                <span>Green=M / Red=N</span>
+              </label>
+              <label class="layer-toggle-label">
+                <input type="checkbox" id="chkDetectShoals" checked>
+                <span>Detect Shoals</span>
+              </label>
+              <button id="btnInvertMap" class="btn" style="padding: 2px 6px; font-size: 9px;">⇄ Invert</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interactive Map, Ships & Obstacles Builder Card -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>Map, Ships &amp; Obstacles Builder</span>
+          <button id="btnClearObstacles" class="btn btn-clear-all" title="Clear entire dashboard to blank open sea">🗑 Clear All</button>
+        </div>
+        <div class="panel-body">
+          <div class="tool-grid">
+            <button id="toolSetStart" class="btn">🚩 Port M (Start)</button>
+            <button id="toolSetDest" class="btn">🎯 Port N (Dest)</button>
+            <button id="toolAddLand" class="btn active">⛰ Land Obstacle</button>
+            <button id="toolAddShallow" class="btn">🏖 Shoal Reef</button>
+            <button id="toolAddCargoShip" class="btn">🚢 Cargo Ship</button>
+            <button id="toolAddMiniShip" class="btn">🚤 Mini Ship</button>
+            <button id="toolAddDynamic" class="btn">🧊 Drift Hazard</button>
+            <button id="toolRemoveLand" class="btn">🌊 Erase Entity</button>
+          </div>
+
+          <!-- Placement Settings Bar -->
+          <div class="entity-options-box">
+            <div class="brush-row">
+              <span class="opt-label">Brush:</span>
+              <div class="brush-pills">
+                <button class="brush-btn active" data-brush="1">1×1</button>
+                <button class="brush-btn" data-brush="2">3×3</button>
+                <button class="brush-btn" data-brush="3">5×5</button>
+              </div>
+              <span class="opt-hint" id="toolInstructionHint">Click/drag to draw</span>
+            </div>
+
+            <div class="craft-config-row">
+              <div class="craft-field">
+                <label for="placeCraftSpeed">Speed (kn)</label>
+                <input type="number" id="placeCraftSpeed" value="12" min="0" max="30" step="1">
+              </div>
+              <div class="craft-field">
+                <label for="placeCraftHeading">Course (°)</label>
+                <input type="number" id="placeCraftHeading" value="135" min="0" max="359" step="5">
+              </div>
+              <label class="layer-toggle-label anchored-check" title="Set placed craft/hazard speed to 0 knots">
+                <input type="checkbox" id="chkPlaceAnchored">
+                <span>Static (0 kn)</span>
+              </label>
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1.3fr 1fr; gap: 5px; margin-top: 6px;">
+            <select id="presetSelect" class="form-control" style="font-size: 10px; padding: 4px 6px;">
+              <option value="archipelago">Preset: Archipelago</option>
+              <option value="singapore">Preset: Singapore Strait</option>
+              <option value="ice_alley">Preset: Iceberg Alley</option>
+              <option value="canal">Preset: Narrow Canal</option>
+              <option value="blank">Preset: Blank Open Sea</option>
+            </select>
+            <button id="btnRandomMap" class="btn">🎲 Random Map</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Three-Stage Hybrid Pipeline Sequential Progress Card -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <span>3-Algorithm Sequential Solver</span>
+          <span class="speed-badge" id="winnerBadgeDisplay">Ready</span>
         </div>
         <div class="panel-body">
           <div class="stage-flow-container">
             <div class="stage-step-card" id="stepCard1">
               <div>
-                <div class="stage-label">Stage 1: A* Global Search</div>
-                <div class="stage-desc">Grid-based ➔ Coarse waypoint route</div>
+                <div class="stage-label">1. A* Global Search</div>
+                <div class="stage-desc" id="stepDesc1">Grid octile shortest safe corridor</div>
               </div>
-              <span class="badge badge-warning">Stage 1</span>
+              <span class="badge badge-warning" id="stepBadge1">Pending</span>
             </div>
-            <div class="stage-arrow">▼ coarse waypoint route</div>
+            <div class="stage-arrow">▼ 1st ➔ 2nd</div>
             <div class="stage-step-card" id="stepCard2">
               <div>
-                <div class="stage-label">Stage 2: RRT* Kinematic Refinement</div>
-                <div class="stage-desc">Curvature-constrained (R ≥ R_min) ➔ Feasible path</div>
+                <div class="stage-label">2. RRT* Kinematic Refinement</div>
+                <div class="stage-desc" id="stepDesc2">Curvature-constrained (R ≥ R_min)</div>
               </div>
-              <span class="badge" style="background:#E0F2FE; color:#0369A1; border:1px solid #7DD3FC;">Stage 2</span>
+              <span class="badge" id="stepBadge2" style="background:#E0F2FE; color:#0369A1; border:1px solid #7DD3FC;">Pending</span>
             </div>
-            <div class="stage-arrow">▼ kinematically feasible path</div>
-            <div class="stage-step-card active" id="stepCard3">
+            <div class="stage-arrow">▼ 2nd ➔ 3rd</div>
+            <div class="stage-step-card" id="stepCard3">
               <div>
-                <div class="stage-label">Stage 3: Somersault Monkey Search</div>
-                <div class="stage-desc">Multi-objective (Energy, Time, Safety) ➔ ASV Path</div>
+                <div class="stage-label">3. Somersault Monkey Search</div>
+                <div class="stage-desc" id="stepDesc3">Multi-objective Energy, Time &amp; Safety</div>
               </div>
-              <span class="badge badge-success">Stage 3</span>
+              <span class="badge badge-success" id="stepBadge3">Pending</span>
             </div>
           </div>
 
           <!-- Layer Toggles -->
-          <div style="border-top: 1px solid var(--color-rose); padding-top: 6px;">
+          <div style="border-top: 1px solid var(--color-sky); padding-top: 6px;">
             <label style="font-size: 10px; font-weight: 700; color: var(--text-secondary);">VISUALIZATION LAYERS</label>
             <div class="layer-toggles-grid">
               <label class="layer-toggle-label">
                 <input type="checkbox" id="chkStage1" checked>
-                <span>Stage 1 (A*)</span>
+                <span>Algo 1 (A*)</span>
               </label>
               <label class="layer-toggle-label">
                 <input type="checkbox" id="chkStage2" checked>
-                <span>Stage 2 (RRT*)</span>
+                <span>Algo 2 (RRT*)</span>
               </label>
               <label class="layer-toggle-label">
                 <input type="checkbox" id="chkStage3" checked>
-                <span>Stage 3 (Monkey)</span>
+                <span>Best Optimal</span>
               </label>
               <label class="layer-toggle-label">
                 <input type="checkbox" id="chkShipDomain" checked>
@@ -119,30 +239,30 @@
               </label>
               <label class="layer-toggle-label" style="grid-column: 1 / -1;">
                 <input type="checkbox" id="chkAISTraffic" checked>
-                <span>AIS Marine Traffic Broadcasts</span>
+                <span>AIS Ships, Mini-Ships &amp; Hazards</span>
               </label>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Ship Domain SS = L * B * D & Ports M, N Card -->
+      <!-- Ship Domain SS = L * B * D & Ports Card -->
       <div class="panel-card">
         <div class="panel-header">
-          <span>Ship Domain (SS = L × B × D) & Ports</span>
+          <span>Own Cargo Ship Specs (SS = L × B × D)</span>
         </div>
         <div class="panel-body">
-          <div class="domain-formula-card">
+          <div class="domain-formula-card" style="margin-top: 0;">
             <div class="domain-formula-title">
-              <span>Formula: Ship Domain SS = L × B × D</span>
-              <span id="domainVolDisplay">76,800 m³</span>
+              <span>Ship Domain SS = L × B × D</span>
+              <span id="domainVolDisplay">76.8k m³</span>
             </div>
             <div class="domain-formula-calc" id="domainCalcText">
-              200m × 32m × 12m = 76,800 m³ (2D Domain: 48m buffer)
+              200m × 32m × 12m = 76,800 m³
             </div>
             <div style="display: flex; justify-content: space-between; margin-top: 4px; font-size: 9.5px; color: var(--text-secondary);">
-              <span>Departure: <strong id="lblPortM">Port M (5, 44)</strong></span>
-              <span>Arrival: <strong id="lblPortN">Port N (44, 6)</strong></span>
+              <span>Start: <strong id="lblPortM">Port M (4, 45)</strong></span>
+              <span>Dest: <strong id="lblPortN">Port N (45, 4)</strong></span>
             </div>
           </div>
 
@@ -174,64 +294,42 @@
           </div>
         </div>
       </div>
-
-      <!-- Interactive Map Tools Card -->
-      <div class="panel-card">
-        <div class="panel-header">
-          <span>Interactive Map & Traffic Tools</span>
-        </div>
-        <div class="panel-body">
-          <div class="tool-grid">
-            <button id="toolSetStart" class="btn">🚩 Set Port M</button>
-            <button id="toolSetDest" class="btn">🎯 Set Port N</button>
-            <button id="toolAddLand" class="btn active">⛰ Add Land</button>
-            <button id="toolRemoveLand" class="btn">🌊 Clear Land</button>
-            <button id="toolAddShallow" class="btn">🏖 Add Shoal</button>
-            <button id="toolAddDynamic" class="btn">📍 Place Hazard</button>
-          </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-top: 6px;">
-            <button id="btnAddAIS" class="btn">🚢 Add AIS</button>
-            <button id="btnRandomMap" class="btn">🎲 Random Map</button>
-            <button id="btnClearObstacles" class="btn">🗑 Clear All</button>
-          </div>
-        </div>
-      </div>
     </section>
 
-    <!-- Column 2: 500x500 Canvas Stage -->
+    <!-- Column 2: 500x500 Canvas Stage & Live Telemetry -->
     <section class="canvas-column">
       <div class="canvas-wrapper">
         <div class="canvas-header-bar">
-          <span>500×500 px Sea Map | Port M ➔ Port N | AIS Traffic</span>
-          <span style="font-size: 10px; color: var(--text-secondary);">Real-Time 60 FPS</span>
+          <span>500×500 px Sea Map | Port M ➔ Port N | Live Entities</span>
+          <span id="canvasModeStatus" style="font-size: 10px; color: var(--text-secondary);">Tool: Land Obstacle</span>
         </div>
 
         <canvas id="mapCanvas" width="500" height="500"></canvas>
 
         <div class="canvas-footer-bar">
-          <span>Click / drag to edit map using the selected tool</span>
-          <span id="canvasCoordsDisplay">Hover over cell to inspect</span>
+          <span>Click / drag on sea grid (drag Ship tools to aim heading)</span>
+          <span id="canvasCoordsDisplay">Hover cell to inspect depth &amp; clearance</span>
         </div>
       </div>
 
       <!-- Live Navigation Telemetry Card -->
       <div class="panel-card" style="margin-top: 12px;">
         <div class="panel-header">
-          <span>Live Navigation & Energy Telemetry</span>
+          <span>Live Navigation &amp; Optimal Path Telemetry</span>
           <span style="font-size: 10px; color: var(--text-secondary);">ASV Sensor Bus</span>
         </div>
         <div class="panel-body">
           <div class="stats-grid">
             <div class="stat-box">
-              <div class="stat-label">Pipeline Stage</div>
-              <div class="stat-value" id="statAlg">HYBRID 3-STAGE</div>
+              <div class="stat-label">Selected Best Path</div>
+              <div class="stat-value" id="statAlg">—</div>
             </div>
             <div class="stat-box">
-              <div class="stat-label">Tree / Sample Nodes</div>
+              <div class="stat-label">Nodes / Tree Sampled</div>
               <div class="stat-value" id="statNodes">—</div>
             </div>
             <div class="stat-box">
-              <div class="stat-label">Planned Path Length</div>
+              <div class="stat-label">Optimal Path Length</div>
               <div class="stat-value" id="statLength">—</div>
             </div>
             <div class="stat-box">
@@ -240,26 +338,26 @@
             </div>
             <div class="stat-box">
               <div class="stat-label">Energy Drag Index</div>
-              <div class="stat-value" id="statEnergy">Low (Optimized)</div>
+              <div class="stat-value" id="statEnergy">—</div>
             </div>
             <div class="stat-box">
               <div class="stat-label">Transit Time (ETA)</div>
               <div class="stat-value" id="statETA">—</div>
             </div>
             <div class="stat-box">
-              <div class="stat-label">Domain Clearance Margin</div>
+              <div class="stat-label">Min Edge Clearance</div>
               <div class="stat-value" id="statClearance">—</div>
             </div>
             <div class="stat-box">
               <div class="stat-label">Stopping Distance</div>
-              <div class="stat-value" id="statStopping">175 m</div>
+              <div class="stat-value" id="statStopping">36 m</div>
             </div>
             <div class="stat-box">
               <div class="stat-label">Ship Speed</div>
               <div class="stat-value" id="statSpeed">0.0 kn</div>
             </div>
             <div class="stat-box">
-              <div class="stat-label">Dynamic Reroute Count</div>
+              <div class="stat-label">Dynamic Reroutes (Path B)</div>
               <div class="stat-value" id="statReplans">0</div>
             </div>
           </div>
@@ -267,31 +365,35 @@
       </div>
     </section>
 
-    <!-- Column 3: Live AIS Table, Comparison & Event Log -->
+    <!-- Column 3: Live Vessels/Hazards, Algorithm Comparison & Event Log -->
     <section class="info-column">
       <!-- Live AIS Marine Traffic Table -->
       <div class="panel-card">
         <div class="panel-header">
-          <span>Live AIS Marine Traffic (Other Vessels)</span>
-          <button id="btnSpawnAIS" class="btn" style="padding: 2px 6px; font-size: 9.5px;">➕ Spawn Vessel</button>
+          <span>Active Ships, Mini-Ships &amp; Obstacles (<span id="trafficCountBadge">4 ships | 0 hazards</span>)</span>
+          <div style="display: flex; gap: 4px;">
+            <button id="btnSpawnCargoAIS" class="btn" style="padding: 2px 6px; font-size: 9px;">+ Cargo</button>
+            <button id="btnSpawnMiniAIS" class="btn" style="padding: 2px 6px; font-size: 9px;">+ Mini</button>
+            <button id="btnSpawnHazard" class="btn" style="padding: 2px 6px; font-size: 9px;">+ Hazard</button>
+          </div>
         </div>
         <div class="panel-body" style="padding: 5px;">
           <div class="ais-table-container">
             <table class="ais-table">
               <thead>
                 <tr>
-                  <th>MMSI</th>
-                  <th>Vessel Name</th>
-                  <th>Type</th>
+                  <th>Name</th>
+                  <th>Class</th>
                   <th>SOG</th>
                   <th>COG</th>
                   <th>CPA</th>
                   <th>TCPA</th>
                   <th>Risk</th>
+                  <th>Del</th>
                 </tr>
               </thead>
               <tbody id="aisTrafficTbody">
-                <!-- Dynamically populated every frame -->
+                <!-- Dynamically populated -->
               </tbody>
             </table>
           </div>
@@ -301,7 +403,7 @@
       <!-- Algorithm Comparison Table -->
       <div class="panel-card">
         <div class="panel-header">
-          <span>Algorithm Comparison Table</span>
+          <span>Algorithm Sequential Comparison &amp; Winner</span>
         </div>
         <div class="panel-body" style="padding: 5px;">
           <div class="table-responsive">
@@ -314,12 +416,11 @@
                   <th>Length</th>
                   <th>Turn</th>
                   <th>Clearance</th>
-                  <th>Violations</th>
-                  <th>Status</th>
+                  <th>Status / Rank</th>
                 </tr>
               </thead>
               <tbody id="comparisonTbody">
-                <!-- Dynamically populated -->
+                <!-- Dynamically populated step-by-step -->
               </tbody>
             </table>
           </div>
@@ -329,7 +430,7 @@
       <!-- Real-Time Event Log Terminal -->
       <div class="panel-card">
         <div class="panel-header">
-          <span>Real-Time Navigation & AIS Collision Log</span>
+          <span>Real-Time Solver &amp; Collision Log</span>
           <button id="btnClearLog" class="btn" style="padding: 2px 6px; font-size: 9.5px;">Clear</button>
         </div>
         <div class="panel-body">
@@ -344,11 +445,11 @@
       <!-- Maritime Legend -->
       <div class="panel-card">
         <div class="panel-header">
-          <span>Maritime Physics & Legend</span>
+          <span>Maritime Physics &amp; Symbol Legend</span>
         </div>
         <div class="panel-body">
           <div class="doc-box">
-            <h4>Three-Stage Hybrid & AIS Legend</h4>
+            <h4>Zero-Collision Architecture &amp; Symbology</h4>
             <div class="legend-row">
               <div class="legend-item">
                 <span class="legend-color" style="background-color: #E0F4FF;"></span>
@@ -364,19 +465,19 @@
               </div>
               <div class="legend-item">
                 <span class="legend-color" style="background-color: #D97706;"></span>
-                <span>Stage 1 (A*)</span>
+                <span>Algo 1 (A*)</span>
               </div>
               <div class="legend-item">
                 <span class="legend-color" style="background-color: #0284C7;"></span>
-                <span>Stage 2 (RRT*)</span>
+                <span>Algo 2 (RRT*)</span>
               </div>
               <div class="legend-item">
                 <span class="legend-color" style="background-color: #39A7FF;"></span>
-                <span>Stage 3 (Monkey)</span>
+                <span>Best Optimal</span>
               </div>
               <div class="legend-item">
                 <span class="legend-color" style="background-color: #15803D;"></span>
-                <span>Path B (Avoidance)</span>
+                <span>Path B Avoidance</span>
               </div>
               <div class="legend-item">
                 <span class="legend-color" style="background-color: #87C4FF;"></span>
@@ -384,7 +485,7 @@
               </div>
             </div>
             <div style="margin-top: 6px; font-size: 9.5px; line-height: 1.35;">
-              <strong>Ship Domain:</strong> <code>SS = L × B × D</code> defines the 3D safety volume. Stage 1 finds global corridor, Stage 2 enforces kinematic curvature constraints <code>&kappa; &le; 1/R<sub>min</sub></code>, and Stage 3 optimizes multi-objective energy and time efficiency.
+              <strong>Sequential Optimal Pipeline:</strong> Calculates A*, RRT*, and Somersault Monkey Search one by one with continuous hull-edge distance checks, audits every segment for zero overlap against land, shoals, ships, and hazards, selects the highest-scoring collision-free route, and triggers real-time dynamic avoidance (Path B) if traffic approaches.
             </div>
           </div>
         </div>
@@ -402,6 +503,7 @@
   <script src="js/curvature.js"></script>
   <script src="js/pipeline.js"></script>
   <script src="js/dynamic.js"></script>
+  <script src="js/mapImporter.js"></script>
   <script src="js/renderer.js"></script>
   <script src="js/main.js"></script>
 </body>

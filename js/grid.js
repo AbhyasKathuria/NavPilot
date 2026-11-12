@@ -34,7 +34,7 @@ class SeaGrid {
   }
 
   /**
-   * Initializes grid matrices
+   * Initializes grid matrices to pure open deep sea (28m depth).
    */
   init() {
     this.cells = [];
@@ -54,6 +54,16 @@ class SeaGrid {
       this.depths.push(depthRow);
       this.distanceField.push(distRow);
     }
+  }
+
+  /**
+   * Resets entire sea chart to a 100% blank open-water canvas (no land, no shoals)
+   */
+  clearToBlankSea(shipDraft = 12.0) {
+    this.init();
+    this.start = { x: 4, y: 45 };
+    this.destination = { x: 45, y: 4 };
+    this.computeDistanceField(shipDraft);
   }
 
   /**
@@ -194,8 +204,65 @@ class SeaGrid {
   }
 
   /**
-   * Checks if a point or grid coordinate is passable for a ship
-   * with given beam, draft, and safety buffer.
+   * Computes exact continuous Euclidean distance (in meters) from continuous position (x, y)
+   * to the nearest hazard cell square [cx - 0.5, cx + 0.5] x [cy - 0.5, cy + 0.5].
+   * Guarantees zero sub-cell grazing or corner clipping against drawn squares.
+   */
+  getExactHazardDistanceMeters(x, y, shipDraft = 12.0) {
+    if (x < -0.49 || x > this.cols - 0.51 || y < -0.49 || y > this.rows - 0.51) {
+      return 0.0;
+    }
+
+    const gx = Math.max(0, Math.min(this.cols - 1, Math.round(x)));
+    const gy = Math.max(0, Math.min(this.rows - 1, Math.round(y)));
+    const quickCenterDist = this.distanceField[gy][gx];
+    if (quickCenterDist >= 150.0) {
+      return quickCenterDist - 0.5 * this.cellSizeMeters;
+    }
+
+    const minCx = Math.max(0, Math.floor(x) - 2);
+    const maxCx = Math.min(this.cols - 1, Math.ceil(x) + 2);
+    const minCy = Math.max(0, Math.floor(y) - 2);
+    const maxCy = Math.min(this.rows - 1, Math.ceil(y) + 2);
+
+    let minDistCells = Infinity;
+
+    for (let cy = minCy; cy <= maxCy; cy++) {
+      for (let cx = minCx; cx <= maxCx; cx++) {
+        const isHazard = (this.cells[cy][cx] === this.TYPE_LAND) ||
+                         (this.depths[cy][cx] < shipDraft);
+        if (!isHazard) continue;
+
+        const dx = Math.max(0, Math.abs(x - cx) - 0.5);
+        const dy = Math.max(0, Math.abs(y - cy) - 0.5);
+        const distCells = Math.hypot(dx, dy);
+        if (distCells < minDistCells) {
+          minDistCells = distCells;
+          if (minDistCells === 0) return 0.0;
+        }
+      }
+    }
+
+    if (minDistCells !== Infinity) {
+      return minDistCells * this.cellSizeMeters;
+    }
+
+    return Math.max(0, quickCenterDist - 0.5 * this.cellSizeMeters);
+  }
+
+  /**
+   * Converts center-clearance request into exact continuous square-edge clearance (meters).
+   */
+  toEdgeClearanceMeters(requiredClearanceMeters = 25.0) {
+    if (requiredClearanceMeters <= 0.0) return 0.0;
+    if (requiredClearanceMeters >= 0.5 * this.cellSizeMeters) {
+      return Math.max(18.0, requiredClearanceMeters - 0.5 * this.cellSizeMeters);
+    }
+    return requiredClearanceMeters;
+  }
+
+  /**
+   * Checks if continuous coordinate (x, y) is safely passable without grazing obstacle borders.
    */
   isPassable(x, y, shipDraft = 12.0, requiredClearanceMeters = 25.0) {
     const gx = Math.round(x);
@@ -206,18 +273,56 @@ class SeaGrid {
     if (this.cells[gy][gx] === this.TYPE_LAND) return false;
     if (this.depths[gy][gx] < shipDraft) return false;
 
-    // Check clearance margin around ship hull
-    if (this.distanceField[gy][gx] < requiredClearanceMeters) {
+    const edgeDist = this.getExactHazardDistanceMeters(x, y, shipDraft);
+    if (edgeDist <= 0.0) return false;
+
+    const reqEdge = this.toEdgeClearanceMeters(requiredClearanceMeters);
+    if (edgeDist < reqEdge) {
       return false;
     }
     return true;
   }
 
   /**
-   * Continuous swept Line-Of-Sight (LOS) test between (x0, y0) and (x1, y1) in grid coordinates.
-   * Checks if a ship-sized buffer can traverse cleanly without touching obstacles or shoals.
+   * Swept-area physical hull footprint check (center, bow, stern, port/starboard sides).
    */
-  lineOfSight(x0, y0, x1, y1, shipDraft = 12.0, requiredClearanceMeters = 25.0) {
+  isShipFootprintSafe(x, y, headingRad, shipLengthMeters = 200.0, shipBeamMeters = 32.0, shipDraft = 12.0, extraMarginMeters = 3.0) {
+    const halfLenCells = (shipLengthMeters * 0.5) / this.cellSizeMeters;
+    const halfBeamCells = (shipBeamMeters * 0.5) / this.cellSizeMeters;
+    const marginCells = extraMarginMeters / this.cellSizeMeters;
+
+    const cosH = Math.cos(headingRad);
+    const sinH = Math.sin(headingRad);
+
+    // Check critical perimeter points of rotated rectangular ship hull + safety buffer
+    const longSamples = [-halfLenCells * 0.85, 0, halfLenCells * 0.85];
+    const latSamples = [-(halfBeamCells + marginCells), 0, (halfBeamCells + marginCells)];
+
+    for (let i = 0; i < longSamples.length; i++) {
+      for (let j = 0; j < latSamples.length; j++) {
+        const lx = longSamples[i];
+        const ly = latSamples[j];
+        const wx = x + lx * cosH - ly * sinH;
+        const wy = y + lx * sinH + ly * cosH;
+
+        const gx = Math.round(wx);
+        const gy = Math.round(wy);
+        if (!this.inBounds(gx, gy)) return false;
+        if (this.cells[gy][gx] === this.TYPE_LAND || this.depths[gy][gx] < shipDraft) {
+          return false;
+        }
+      }
+    }
+
+    // Center point must always hold at least halfBeam + margin from obstacle edges
+    return this.getExactHazardDistanceMeters(x, y, shipDraft) >= (shipBeamMeters * 0.5 + extraMarginMeters);
+  }
+
+  /**
+   * Continuous swept Line-Of-Sight (LOS) test between (x0, y0) and (x1, y1) in grid coordinates.
+   * High-resolution 0.25-cell step prevents corner clipping or grazing across land/shoal squares.
+   */
+  lineOfSight(x0, y0, x1, y1, shipDraft = 12.0, requiredClearanceMeters = 25.0, stepCells = 0.25) {
     const dx = x1 - x0;
     const dy = y1 - y0;
     const distanceCells = Math.hypot(dx, dy);
@@ -226,8 +331,7 @@ class SeaGrid {
       return this.isPassable(x0, y0, shipDraft, requiredClearanceMeters);
     }
 
-    // Step size: 0.35 cells ensures no corner leakage or skipped obstacles
-    const steps = Math.ceil(distanceCells / 0.35);
+    const steps = Math.max(2, Math.ceil(distanceCells / stepCells));
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const x = x0 + dx * t;
@@ -236,6 +340,91 @@ class SeaGrid {
         return false;
       }
     }
+    return true;
+  }
+
+  /**
+   * Finds nearest navigable deep-sea cell near (targetX, targetY)
+   */
+  findNearestPassableCell(targetX, targetY, shipDraft = 12.0, requiredEdgeClearanceMeters = 18.0) {
+    const sx = Math.max(0, Math.min(this.cols - 1, Math.round(targetX)));
+    const sy = Math.max(0, Math.min(this.rows - 1, Math.round(targetY)));
+
+    let best = null;
+    let bestScore = Infinity;
+
+    for (let r = 0; r < Math.max(this.cols, this.rows); r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+          const nx = sx + dx;
+          const ny = sy + dy;
+          if (!this.inBounds(nx, ny)) continue;
+          if (this.cells[ny][nx] === this.TYPE_LAND || this.depths[ny][nx] < shipDraft) continue;
+          const edgeDist = this.getExactHazardDistanceMeters(nx, ny, shipDraft);
+          if (edgeDist >= requiredEdgeClearanceMeters) {
+            const d = Math.hypot(dx, dy);
+            if (d < bestScore) {
+              bestScore = d;
+              best = { x: nx, y: ny };
+            }
+          }
+        }
+      }
+      if (best) return best;
+    }
+
+    // Fallback: any non-land water cell
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        if (this.cells[y][x] !== this.TYPE_LAND && this.depths[y][x] >= shipDraft) {
+          return { x, y };
+        }
+      }
+    }
+    return { x: sx, y: sy };
+  }
+
+  /**
+   * Serializes map to JSON for saving/sharing
+   */
+  exportToJSON() {
+    return JSON.stringify({
+      version: 1,
+      cols: this.cols,
+      rows: this.rows,
+      cellSizeMeters: this.cellSizeMeters,
+      start: this.start,
+      destination: this.destination,
+      cells: this.cells,
+      depths: this.depths
+    }, null, 2);
+  }
+
+  /**
+   * Loads grid from parsed JSON object
+   */
+  loadFromJSON(data, shipDraft = 12.0) {
+    if (!data || !Array.isArray(data.cells) || data.cells.length !== this.rows) {
+      return false;
+    }
+    this.init();
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        const type = data.cells[y][x] ?? this.TYPE_SEA;
+        const depth = (data.depths && data.depths[y]) ? data.depths[y][x] : null;
+        this.setCell(x, y, type, depth);
+      }
+    }
+    if (data.start && this.inBounds(data.start.x, data.start.y)) {
+      this.start = { x: data.start.x, y: data.start.y };
+      this.setCell(this.start.x, this.start.y, this.TYPE_SEA);
+    }
+    if (data.destination && this.inBounds(data.destination.x, data.destination.y)) {
+      this.destination = { x: data.destination.x, y: data.destination.y };
+      this.setCell(this.destination.x, this.destination.y, this.TYPE_SEA);
+    }
+    this.computeDistanceField(shipDraft);
     return true;
   }
 
