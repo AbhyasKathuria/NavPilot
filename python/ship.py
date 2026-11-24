@@ -114,11 +114,19 @@ class CargoASV:
                 self.heading = math.atan2(path_points[1]["y"] - path_points[0]["y"],
                                           path_points[1]["x"] - path_points[0]["x"])
         else:
-            self.replan_path = path_points
-            self.active_path = path_points
+            # Connect smoothly from current continuous position without coordinate teleportation
+            d0 = math.hypot(path_points[0]["x"] - self.x, path_points[0]["y"] - self.y)
+            if 0.05 < d0 < 3.0:
+                self.active_path = [{"x": self.x, "y": self.y}] + path_points
+            else:
+                self.active_path = path_points
+            self.replan_path = self.active_path
             self.has_replanned = True
             self.total_replans += 1
             self.path_index = 0
+            if len(self.active_path) > 1:
+                self.heading = math.atan2(self.active_path[1]["y"] - self.y,
+                                          self.active_path[1]["x"] - self.x)
         self.target_speed = self.max_speed_ms
         self.state = "CRUISING"
 
@@ -162,16 +170,37 @@ class CargoASV:
                 self.path_index += 1
                 continue
 
+            candidate_x = self.x
+            candidate_y = self.y
+            candidate_dist = 0.0
+
             if remaining_move >= dist_to_next:
-                self.x = p_next["x"]
-                self.y = p_next["y"]
-                remaining_move -= dist_to_next
-                self.path_index += 1
+                candidate_x = p_next["x"]
+                candidate_y = p_next["y"]
+                candidate_dist = dist_to_next
             else:
                 ratio = remaining_move / dist_to_next
-                self.x += seg_dx * ratio
-                self.y += seg_dy * ratio
-                remaining_move = 0.0
+                candidate_x = self.x + seg_dx * ratio
+                candidate_y = self.y + seg_dy * ratio
+                candidate_dist = remaining_move
+
+            # STRICT COLLISION PREVENTION: Check if candidate move enters land or shallow shoal
+            if grid:
+                cgx = int(round(candidate_x))
+                cgy = int(round(candidate_y))
+                is_blocked = (not grid.in_bounds(cgx, cgy) or
+                              grid.cells[cgy][cgx] == grid.TYPE_LAND or
+                              grid.depths[cgy][cgx] < self.draft)
+                if is_blocked:
+                    self.speed = 0.0
+                    self.hold_and_wait()
+                    return
+
+            self.x = candidate_x
+            self.y = candidate_y
+            remaining_move -= candidate_dist
+            if candidate_x == p_next["x"] and candidate_y == p_next["y"]:
+                self.path_index += 1
 
         if self.path_index < len(self.active_path) - 1:
             p_curr = self.active_path[self.path_index]
@@ -192,9 +221,12 @@ class CargoASV:
             gx = int(round(self.x))
             gy = int(round(self.y))
             if not grid.in_bounds(gx, gy) or grid.cells[gy][gx] == grid.TYPE_LAND or grid.depths[gy][gx] < self.draft:
-                safe_pt = self.active_path[min(self.path_index, len(self.active_path) - 1)]
-                self.x = safe_pt["x"]
-                self.y = safe_pt["y"]
+                safe_cell = grid.find_nearest_passable_cell(self.x, self.y, self.draft, 12.0)
+                if safe_cell:
+                    self.x = safe_cell["x"]
+                    self.y = safe_cell["y"]
+                self.speed = 0.0
+                self.hold_and_wait()
 
         if self.path_index >= len(self.active_path) - 1:
             final_dest = self.active_path[-1]

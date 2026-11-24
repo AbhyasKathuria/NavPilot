@@ -172,38 +172,157 @@ class DynamicObstacleManager {
   }
 
   /**
-   * Evaluates collision threats against AIS vessels and dynamic debris,
-   * triggering dynamic rerouting or hold-and-wait if necessary.
+   * Evaluates whether the vessel's current position, immediate ahead vector, or remaining
+   * active path intersects newly painted land obstacles, shoals, or compromised clearance corridors.
    */
-  checkAndReroute(ship, hybridPlanner, logCallback) {
+  evaluateStaticObstruction(ship) {
+    if (!ship.activePath || ship.activePath.length < 2) {
+      return { conflictDetected: false, emergencyImminent: false, obstructedIndex: -1, distToObstacleMeters: Infinity, reason: '' };
+    }
+
+    const grid = this.grid;
+    const requiredClearance = ship.computeRequiredClearanceMeters();
+    const stoppingDistMeters = ship.computeStoppingDistanceMeters();
+    const cellSize = grid.cellSizeMeters;
+
+    // 1. Immediate ship hull check (current position)
+    const curGx = Math.round(ship.x);
+    const curGy = Math.round(ship.y);
+    if (!grid.inBounds(curGx, curGy) ||
+        grid.cells[curGy][curGx] === grid.TYPE_LAND ||
+        grid.depths[curGy][curGx] < ship.draft) {
+      return {
+        conflictDetected: true,
+        emergencyImminent: true,
+        obstructedIndex: ship.pathIndex,
+        distToObstacleMeters: 0,
+        reason: 'Ship domain envelope touching newly drawn land/shoal barrier'
+      };
+    }
+
+    // 2. Immediate lookahead segment: between ship's current position and next upcoming waypoint
+    const nextIdx = Math.min(ship.pathIndex + 1, ship.activePath.length - 1);
+    const pNext = ship.activePath[nextIdx];
+    const segDistMeters = Math.hypot(pNext.x - ship.x, pNext.y - ship.y) * cellSize;
+    const subSteps = Math.max(3, Math.ceil(segDistMeters / (cellSize * 0.35)));
+
+    for (let s = 1; s <= subSteps; s++) {
+      const u = s / subSteps;
+      const sx = ship.x + (pNext.x - ship.x) * u;
+      const sy = ship.y + (pNext.y - ship.y) * u;
+      const sgx = Math.round(sx);
+      const sgy = Math.round(sy);
+
+      if (!grid.inBounds(sgx, sgy) ||
+          grid.cells[sgy][sgx] === grid.TYPE_LAND ||
+          grid.depths[sgy][sgx] < ship.draft) {
+        const dM = u * segDistMeters;
+        return {
+          conflictDetected: true,
+          emergencyImminent: dM <= Math.max(25.0, stoppingDistMeters * 1.5),
+          obstructedIndex: nextIdx,
+          distToObstacleMeters: dM,
+          reason: `Obstacle directly ahead on active heading (${dM.toFixed(0)}m)`
+        };
+      }
+    }
+
+    // 3. Check remaining active path waypoints from nextIdx to destination
+    let accumulatedDistMeters = segDistMeters;
+    for (let i = nextIdx; i < ship.activePath.length; i++) {
+      const pt = ship.activePath[i];
+      const gx = Math.round(pt.x);
+      const gy = Math.round(pt.y);
+
+      if (!grid.inBounds(gx, gy) ||
+          grid.cells[gy][gx] === grid.TYPE_LAND ||
+          grid.depths[gy][gx] < ship.draft) {
+        return {
+          conflictDetected: true,
+          emergencyImminent: accumulatedDistMeters <= Math.max(25.0, stoppingDistMeters * 1.5),
+          obstructedIndex: i,
+          distToObstacleMeters: accumulatedDistMeters,
+          reason: `Waypoint #${i} obstructed by newly drawn land barrier (${accumulatedDistMeters.toFixed(0)}m ahead)`
+        };
+      }
+
+      // Continuous hull clearance check around waypoint
+      const clearanceM = grid.getExactHazardDistanceMeters(pt.x, pt.y, ship.draft);
+      if (clearanceM < Math.min(12.0, requiredClearance * 0.25)) {
+        return {
+          conflictDetected: true,
+          emergencyImminent: accumulatedDistMeters <= Math.max(25.0, stoppingDistMeters * 1.2),
+          obstructedIndex: i,
+          distToObstacleMeters: accumulatedDistMeters,
+          reason: `Clearance at Waypoint #${i} compromised (${clearanceM.toFixed(1)}m < safe limit)`
+        };
+      }
+
+      // Line of sight between consecutive waypoints along the remaining route
+      if (i > nextIdx) {
+        const prevPt = ship.activePath[i - 1];
+        if (!grid.lineOfSight(prevPt.x, prevPt.y, pt.x, pt.y, ship.draft, Math.min(10.0, requiredClearance * 0.2))) {
+          return {
+            conflictDetected: true,
+            emergencyImminent: accumulatedDistMeters <= Math.max(25.0, stoppingDistMeters * 1.5),
+            obstructedIndex: i,
+            distToObstacleMeters: accumulatedDistMeters,
+            reason: `Channel segment between #${i - 1} and #${i} blocked by land obstacle`
+          };
+        }
+      }
+
+      if (i < ship.activePath.length - 1) {
+        accumulatedDistMeters += Math.hypot(ship.activePath[i + 1].x - pt.x, ship.activePath[i + 1].y - pt.y) * cellSize;
+      }
+    }
+
+    return {
+      conflictDetected: false,
+      emergencyImminent: false,
+      obstructedIndex: -1,
+      distToObstacleMeters: Infinity,
+      reason: ''
+    };
+  }
+
+  /**
+   * Evaluates collision threats against static obstacles (newly drawn land/shoals),
+   * AIS vessels, and dynamic debris, triggering instant dynamic rerouting or hold-and-wait if necessary.
+   */
+  checkAndReroute(ship, hybridPlanner, logCallback, forceCheck = false) {
     if (!ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED') {
       return;
     }
 
     const horizonSec = ship.lookaheadHorizonSeconds;
+    const staticThreat = this.evaluateStaticObstruction(ship);
     const trafficRisk = this.aisSystem
       ? this.aisSystem.evaluateTrafficRisk(ship, horizonSec)
       : { conflictDetected: false, emergencyImminent: false };
     const debrisThreat = this.evaluateDebrisRisk(ship, horizonSec);
 
-    const anyConflict = trafficRisk.conflictDetected || debrisThreat.conflictDetected;
+    const anyConflict = staticThreat.conflictDetected || trafficRisk.conflictDetected || debrisThreat.conflictDetected;
+    const emergencyImminent = staticThreat.emergencyImminent || trafficRisk.emergencyImminent || debrisThreat.emergencyImminent;
 
-    // If vessel was holding & waiting and path ahead is now clear, resume navigation!
-    if (ship.state === 'HOLD_WAIT' && !anyConflict && !trafficRisk.emergencyImminent) {
+    // If vessel was holding & waiting and path ahead is now completely clear, resume navigation!
+    if (ship.state === 'HOLD_WAIT' && !anyConflict && !emergencyImminent) {
       ship.state = 'CRUISING';
       ship.targetSpeed = ship.maxSpeedMs;
       if (logCallback) {
-        logCallback('Fairway clear of dynamic traffic. Resuming voyage along optimal Path B.', 'success');
+        logCallback('Fairway clear of all obstacles & traffic. Resuming voyage along optimal path.', 'success');
       }
       return;
     }
 
-    // Immediate emergency shield if another vessel or hazard enters immediate hull envelope
-    if (trafficRisk.emergencyImminent || debrisThreat.emergencyImminent) {
-      if (ship.state !== 'HOLD_WAIT') {
+    // IMMEDIATE EMERGENCY PROXIMITY SHIELD:
+    // If an obstacle or vessel is within stopping distance, stop/slow down immediately to prevent collision!
+    if (emergencyImminent) {
+      if (ship.state !== 'HOLD_WAIT' && ship.state !== 'EMERGENCY_STOP') {
         ship.holdAndWait();
         if (logCallback) {
-          logCallback('IMMEDIATE PROXIMITY GUARD: Slowing / holding position while computing evasive avoidance route!', 'warning');
+          const detail = staticThreat.conflictDetected ? staticThreat.reason : 'Traffic/hazard proximity';
+          logCallback(`EMERGENCY PROXIMITY SHIELD: ${detail}. Decelerating / holding position while computing avoidance path!`, 'warning');
         }
       }
     }
@@ -212,14 +331,17 @@ class DynamicObstacleManager {
       return;
     }
 
-    // Check simulation-time debounce so high-speed simulations never miss evasive windows
-    if (this.simTime - this.lastReplanSimTime < this.replanCooldownSimSec) {
+    // Bypass simulation cooldown if static threat is detected or forceCheck is requested!
+    if (!forceCheck && !staticThreat.conflictDetected && (this.simTime - this.lastReplanSimTime < this.replanCooldownSimSec)) {
       return;
     }
 
     let threatName = '';
     let threatDetails = '';
-    if (trafficRisk.conflictDetected && trafficRisk.criticalVessel) {
+    if (staticThreat.conflictDetected) {
+      threatName = 'Newly Placed Land/Shoal Obstacle';
+      threatDetails = staticThreat.reason;
+    } else if (trafficRisk.conflictDetected && trafficRisk.criticalVessel) {
       const v = trafficRisk.criticalVessel;
       threatName = `${v.name} (MMSI: ${v.mmsi})`;
       threatDetails = `TCPA: ${trafficRisk.tcpaSeconds.toFixed(1)}s, CPA: ${trafficRisk.cpaMeters.toFixed(0)}m`;
@@ -233,14 +355,14 @@ class DynamicObstacleManager {
     this.replanBannerTimer = 3.5;
 
     if (logCallback) {
-      logCallback(`Collision Risk Detected: ${threatName} encroaching Ship Domain (${threatDetails}).`, 'warning');
+      logCallback(`Collision Risk Detected: ${threatName} (${threatDetails}).`, 'warning');
       logCallback('Executing real-time 3-Stage Hybrid Avoidance Reroute (Path B)...', 'info');
     }
 
     // Keep exact passable continuous start position so ship never jumps into nearby coastline
-    const rerouteStart = this.grid.isPassable(ship.x, ship.y, ship.draft, 16.0)
+    const rerouteStart = this.grid.isPassable(ship.x, ship.y, ship.draft, 10.0)
       ? { x: ship.x, y: ship.y }
-      : this.grid.findNearestPassableCell(ship.x, ship.y, ship.draft, 18.0);
+      : this.grid.findNearestPassableCell(ship.x, ship.y, ship.draft, 14.0);
     const dest = this.grid.destination;
 
     const rerouteResult = hybridPlanner.plan(rerouteStart, dest, ship, this.aisSystem, {
@@ -249,14 +371,17 @@ class DynamicObstacleManager {
     });
 
     if (rerouteResult.success && rerouteResult.path && rerouteResult.path.length >= 2) {
-      ship.setPath(rerouteResult.path, true);
+      ship.setPath(rerouteResult.path, true, 'Path B (Dynamic Avoidance)', this.grid);
+      ship.state = 'CRUISING';
+      ship.targetSpeed = ship.maxSpeedMs;
+      this.isReplanning = false;
       if (logCallback) {
-        logCallback(`Dynamic Avoidance Route (Path B) active! Length: ${rerouteResult.lengthMeters.toFixed(0)}m, Min Clearance: ${rerouteResult.minClearanceMeters.toFixed(1)}m.`, 'success');
+        logCallback(`Dynamic Avoidance Route (Path B) active! Length: ${rerouteResult.lengthMeters.toFixed(0)}m, Min Clearance: ${rerouteResult.minClearanceMeters.toFixed(1)}m. Obstacle successfully bypassed!`, 'success');
       }
     } else {
-      if (ship.state !== 'HOLD_WAIT') {
+      if (ship.state !== 'HOLD_WAIT' && ship.state !== 'EMERGENCY_STOP') {
         if (logCallback) {
-          logCallback('Fairway constricted by approaching traffic. Applying HOLD-AND-WAIT safety maneuver...', 'warning');
+          logCallback('Fairway constricted or blocked by obstacles. Applying HOLD-AND-WAIT safety maneuver...', 'warning');
         }
         ship.holdAndWait();
       }
@@ -265,10 +390,18 @@ class DynamicObstacleManager {
         obstacleManager: null,
         monkeyIterations: 15
       });
-      if (!staticFallback.success) {
+      if (staticFallback.success && staticFallback.path && staticFallback.path.length >= 2) {
+        ship.setPath(staticFallback.path, true, 'Path B (Fallback Channel)', this.grid);
+        ship.state = 'CRUISING';
+        ship.targetSpeed = ship.maxSpeedMs;
+        this.isReplanning = false;
+        if (logCallback) {
+          logCallback(`Fallback Avoidance Route (Path B) engaged! Length: ${staticFallback.lengthMeters.toFixed(0)}m.`, 'success');
+        }
+      } else {
         ship.emergencyStop();
         if (logCallback) {
-          logCallback('EMERGENCY SAFE STOP: No navigable channel exists between hazards.', 'error');
+          logCallback('EMERGENCY SAFE STOP: No navigable channel exists around placed obstacles. Ship safely holding position.', 'error');
         }
       }
     }

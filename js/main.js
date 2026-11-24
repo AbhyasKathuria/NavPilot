@@ -610,17 +610,32 @@ window.addEventListener('DOMContentLoaded', () => {
 
   function applyPaintBrush(gx, gy, cellType, depthVal) {
     const offset = brushRadius - 1;
+    let modified = false;
+    const curShipGx = Math.round(ship.x);
+    const curShipGy = Math.round(ship.y);
+
     for (let dy = -offset; dy <= offset; dy++) {
       for (let dx = -offset; dx <= offset; dx++) {
         const nx = gx + dx;
         const ny = gy + dy;
         if (!grid.inBounds(nx, ny)) continue;
-        if (cellType !== grid.TYPE_SEA && (grid.isStart(nx, ny) || grid.isDestination(nx, ny))) continue;
-        grid.setCell(nx, ny, cellType, depthVal);
+        if (cellType !== grid.TYPE_SEA) {
+          if (grid.isStart(nx, ny) || grid.isDestination(nx, ny)) continue;
+          if (nx === curShipGx && ny === curShipGy) continue; // Ship cannot be embedded in solid obstacle
+        }
+        if (grid.cells[ny][nx] !== cellType) {
+          grid.setCell(nx, ny, cellType, depthVal);
+          modified = true;
+        }
       }
     }
-    grid.computeDistanceField(ship.draft);
-    mapDirtySinceSolve = true;
+    if (modified) {
+      grid.computeDistanceField(ship.draft);
+      mapDirtySinceSolve = true;
+      if (isSimRunning && ship.activePath) {
+        obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
+      }
+    }
   }
 
   function applyPointOrDragTool(gx, gy) {
@@ -660,6 +675,9 @@ window.addEventListener('DOMContentLoaded', () => {
         logEvent(`Erased drifting hazard #${rmHazard.id}.`, 'info');
         updateAISTrafficTable();
       }
+      if (isSimRunning && ship.activePath) {
+        obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
+      }
     }
   }
 
@@ -692,6 +710,9 @@ window.addEventListener('DOMContentLoaded', () => {
       mapDirtySinceSolve = true;
       logEvent(`Placed Cargo Ship: ${v.name} at (${startPt.x}, ${startPt.y}) | ${cfgSpeed.toFixed(1)}kn @ ${cogDeg.toFixed(0)}°`, 'info');
       updateAISTrafficTable();
+      if (isSimRunning && ship.activePath) {
+        obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
+      }
     } else if (activeTool === 'add_mini_ship') {
       const v = aisSystem.addCustomVessel({
         vesselCategory: 'mini',
@@ -703,6 +724,9 @@ window.addEventListener('DOMContentLoaded', () => {
       mapDirtySinceSolve = true;
       logEvent(`Placed Mini Ship: ${v.name} at (${startPt.x}, ${startPt.y}) | ${v.sog.toFixed(1)}kn @ ${cogDeg.toFixed(0)}°`, 'info');
       updateAISTrafficTable();
+      if (isSimRunning && ship.activePath) {
+        obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
+      }
     } else if (activeTool === 'add_dynamic') {
       const rad = (cogDeg * Math.PI) / 180.0;
       const driftCellsPerSec = isAnchored ? 0.0 : Math.max(0.15, Math.min(0.65, (cfgSpeed * 0.514444) / 50.0 * 0.6));
@@ -712,6 +736,9 @@ window.addEventListener('DOMContentLoaded', () => {
       mapDirtySinceSolve = true;
       logEvent(`Placed Dynamic ${obs.type.toUpperCase()} Hazard #${obs.id} at (${startPt.x}, ${startPt.y}).`, 'info');
       updateAISTrafficTable();
+      if (isSimRunning && ship.activePath) {
+        obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
+      }
     }
   }
 
@@ -973,9 +1000,15 @@ window.addEventListener('DOMContentLoaded', () => {
       if (!ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED' || mapDirtySinceSolve) {
         runSequentialThreeAlgorithms(true);
       } else {
-        isSimRunning = true;
-        updateRunButtonUI(true);
-        logEvent('Resumed autonomous navigation along verified Optimal Path.', 'info');
+        const staticThreat = obstacleManager.evaluateStaticObstruction(ship);
+        if (staticThreat.conflictDetected) {
+          logEvent(`Active route obstructed: ${staticThreat.reason}. Recalculating optimal path...`, 'warning');
+          runSequentialThreeAlgorithms(true);
+        } else {
+          isSimRunning = true;
+          updateRunButtonUI(true);
+          logEvent('Resumed autonomous navigation along verified Optimal Path.', 'info');
+        }
       }
     });
   }

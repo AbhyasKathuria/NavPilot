@@ -146,7 +146,7 @@ class CargoShip {
     this.trail = [];
   }
 
-  setPath(pathPoints, isReplan = false, algorithmLabel = null) {
+  setPath(pathPoints, isReplan = false, algorithmLabel = null, grid = null) {
     if (!pathPoints || pathPoints.length === 0) return;
     if (algorithmLabel) this.selectedAlgorithmName = algorithmLabel;
 
@@ -162,11 +162,32 @@ class CargoShip {
         this.heading = Math.atan2(pathPoints[1].y - pathPoints[0].y, pathPoints[1].x - pathPoints[0].x);
       }
     } else {
-      this.replanPath = pathPoints;
-      this.activePath = pathPoints;
+      // If ship's current position is inside or touching land, move out to the safe passable water point!
+      const currentCellBlocked = grid && (
+        !grid.inBounds(Math.round(this.x), Math.round(this.y)) ||
+        grid.cells[Math.round(this.y)][Math.round(this.x)] === grid.TYPE_LAND ||
+        grid.depths[Math.round(this.y)][Math.round(this.x)] < this.draft
+      );
+
+      if (currentCellBlocked) {
+        this.x = pathPoints[0].x;
+        this.y = pathPoints[0].y;
+        this.activePath = pathPoints;
+      } else {
+        const d0 = Math.hypot(pathPoints[0].x - this.x, pathPoints[0].y - this.y);
+        if (d0 > 0.05 && d0 < 3.0) {
+          this.activePath = [{ x: this.x, y: this.y }, ...pathPoints];
+        } else {
+          this.activePath = pathPoints;
+        }
+      }
+      this.replanPath = this.activePath;
       this.hasReplanned = true;
       this.totalReplans++;
       this.pathIndex = 0;
+      if (this.activePath.length > 1) {
+        this.heading = Math.atan2(this.activePath[1].y - this.y, this.activePath[1].x - this.x);
+      }
     }
     this.targetSpeed = this.maxSpeedMs;
     this.state = 'CRUISING';
@@ -231,16 +252,41 @@ class CargoShip {
         continue;
       }
 
+      let candidateX = this.x;
+      let candidateY = this.y;
+      let candidateDist = 0;
+
       if (remainingMove >= distToNext) {
-        this.x = pNext.x;
-        this.y = pNext.y;
-        remainingMove -= distToNext;
-        this.pathIndex++;
+        candidateX = pNext.x;
+        candidateY = pNext.y;
+        candidateDist = distToNext;
       } else {
         const ratio = remainingMove / distToNext;
-        this.x += segDx * ratio;
-        this.y += segDy * ratio;
-        remainingMove = 0;
+        candidateX = this.x + segDx * ratio;
+        candidateY = this.y + segDy * ratio;
+        candidateDist = remainingMove;
+      }
+
+      // STRICT COLLISION PREVENTION: Check if candidate move enters land or shallow shoal
+      if (grid) {
+        const cgx = Math.round(candidateX);
+        const cgy = Math.round(candidateY);
+        const isBlocked = !grid.inBounds(cgx, cgy) ||
+                          grid.cells[cgy][cgx] === grid.TYPE_LAND ||
+                          grid.depths[cgy][cgx] < this.draft;
+        if (isBlocked) {
+          // An obstacle was placed directly ahead! Stop ship immediately, do NOT step into land!
+          this.speed = 0.0;
+          this.holdAndWait();
+          return;
+        }
+      }
+
+      this.x = candidateX;
+      this.y = candidateY;
+      remainingMove -= candidateDist;
+      if (candidateX === pNext.x && candidateY === pNext.y) {
+        this.pathIndex++;
       }
     }
 
@@ -270,9 +316,14 @@ class CargoShip {
           grid.cells[gy][gx] === grid.TYPE_LAND ||
           grid.depths[gy][gx] < this.draft ||
           exactEdge < minSafeEdge * 0.25) {
-        const safePt = this.activePath[Math.min(this.pathIndex, this.activePath.length - 1)];
-        this.x = safePt.x;
-        this.y = safePt.y;
+        // Vessel is in or dangerously close to an obstacle: push out to nearest safe passable cell
+        const safeCell = grid.findNearestPassableCell ? grid.findNearestPassableCell(this.x, this.y, this.draft, 12.0) : null;
+        if (safeCell) {
+          this.x = safeCell.x;
+          this.y = safeCell.y;
+        }
+        this.speed = 0.0;
+        this.holdAndWait();
       }
     }
 
