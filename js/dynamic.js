@@ -440,26 +440,31 @@ class DynamicObstacleManager {
       return;
     }
 
-    // IMMEDIATE EMERGENCY PROXIMITY SHIELD:
-    // If an obstacle or vessel is within stopping distance or touches the blue circle, stop/slow down immediately to prevent collision!
-    if (emergencyImminent) {
+    // AVOIDANCE EXECUTION SHIELD:
+    // If ship has already recalculated Path B and the route ahead is clear, let the vessel cruise out of the danger zone!
+    if (ship.hasReplanned && !staticThreat.conflictDetected && !forceCheck) {
+      if (ship.state === 'HOLD_WAIT') {
+        ship.state = 'CRUISING';
+        ship.targetSpeed = ship.maxSpeedMs;
+      }
+      return;
+    }
+
+    // IMMEDIATE EMERGENCY FULL STOP:
+    // As soon as circle senses any land or ship, STOP ship immediately (speed = 0 kn) while recalculating path whole again!
+    if (emergencyImminent || anyConflict) {
       if (ship.state !== 'HOLD_WAIT' && ship.state !== 'EMERGENCY_STOP') {
-        ship.holdAndWait();
+        const detail = blueDisturbance.disturbanceDetected
+          ? blueDisturbance.reason
+          : (staticThreat.conflictDetected ? staticThreat.reason : 'Traffic/hazard proximity');
+        ship.immediateFullStop(detail);
         if (logCallback) {
-          const detail = blueDisturbance.disturbanceDetected
-            ? blueDisturbance.reason
-            : (staticThreat.conflictDetected ? staticThreat.reason : 'Traffic/hazard proximity');
-          logCallback(`EMERGENCY PROXIMITY SHIELD: ${detail}. Decelerating / holding position while computing avoidance path!`, 'warning');
+          logCallback(`🛑 BLUE CIRCLE DISTURBANCE: ${detail}. Ship STOPPED immediately (0 kn)! Recalculating path whole again via 3-Stage Pipeline (A* ➔ RRT* ➔ SMSO)...`, 'warning');
         }
       }
     }
 
     if (!anyConflict) {
-      return;
-    }
-
-    // Bypass simulation cooldown if disturbance or static threat is detected or forceCheck is requested!
-    if (!forceCheck && !blueDisturbance.disturbanceDetected && !staticThreat.conflictDetected && (this.simTime - this.lastReplanSimTime < this.replanCooldownSimSec)) {
       return;
     }
 
@@ -485,8 +490,8 @@ class DynamicObstacleManager {
     this.replanBannerTimer = 3.5;
 
     if (logCallback) {
-      logCallback(`Collision Risk Detected: ${threatName} (${threatDetails}).`, 'warning');
-      logCallback('Executing real-time 3-Stage Hybrid Avoidance Reroute (Path B)...', 'info');
+      logCallback(`Collision Threat: ${threatName} (${threatDetails}). Calculating whole path again...`, 'warning');
+      logCallback('Computing Sequential Three-Stage Hybrid Pipeline (A* ➔ RRT* ➔ Somersault Monkey Search)...', 'info');
     }
 
     // Keep exact passable continuous start position so ship never jumps into nearby coastline
@@ -497,7 +502,7 @@ class DynamicObstacleManager {
 
     const rerouteResult = hybridPlanner.plan(rerouteStart, dest, ship, this.aisSystem, {
       obstacleManager: this,
-      monkeyIterations: 18
+      monkeyIterations: 20
     });
 
     if (rerouteResult.success && rerouteResult.path && rerouteResult.path.length >= 2) {
@@ -506,7 +511,7 @@ class DynamicObstacleManager {
       ship.targetSpeed = ship.maxSpeedMs;
       this.isReplanning = false;
       if (logCallback) {
-        logCallback(`Dynamic Avoidance Route (Path B) active! Length: ${rerouteResult.lengthMeters.toFixed(0)}m, Min Clearance: ${rerouteResult.minClearanceMeters.toFixed(1)}m. Obstacle successfully bypassed!`, 'success');
+        logCallback(`✅ FULL PATH RECALCULATED: Avoidance Route (Path B) active! Length: ${rerouteResult.lengthMeters.toFixed(0)}m, Min Clearance: ${rerouteResult.minClearanceMeters.toFixed(1)}m. Resuming autonomous navigation.`, 'success');
       }
     } else {
       if (ship.state !== 'HOLD_WAIT' && ship.state !== 'EMERGENCY_STOP') {

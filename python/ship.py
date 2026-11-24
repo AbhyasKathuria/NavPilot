@@ -180,6 +180,13 @@ class CargoASV:
         self.state = "HOLD_WAIT"
         self.target_speed = 0.0
 
+    def immediate_full_stop(self, reason: str = ""):
+        self.state = "HOLD_WAIT"
+        self.speed = 0.0
+        self.target_speed = 0.0
+        self.domain_disturbance = True
+        self.domain_disturbance_reason = reason
+
     def emergency_stop(self):
         self.state = "EMERGENCY_STOP"
         self.target_speed = 0.0

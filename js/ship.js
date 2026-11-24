@@ -271,6 +271,15 @@ class CargoShip {
     this.targetSpeed = 0.0;
   }
 
+  immediateFullStop(reason = '') {
+    this.state = 'HOLD_WAIT';
+    this.speed = 0.0;
+    this.targetSpeed = 0.0;
+    this.domainDisturbance = true;
+    if (reason) this.domainDisturbanceReason = reason;
+    this.domainDisturbancePulseTimer = 3.5;
+  }
+
   emergencyStop() {
     this.state = 'EMERGENCY_STOP';
     this.targetSpeed = 0.0;
