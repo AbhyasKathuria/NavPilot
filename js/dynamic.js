@@ -287,6 +287,104 @@ class DynamicObstacleManager {
   }
 
   /**
+   * Scans the Blue Ship Domain Envelope (SS = L * B * D) for ANY disturbance:
+   * - Land cells (TYPE_LAND) encroaching or inside the blue circle
+   * - Shallow shoals (depth < draft) encroaching or inside the blue circle
+   * - AIS vessels (commercial, mini) encroaching or inside the blue circle
+   * - Dynamic drift hazards (icebergs, debris) encroaching or inside the blue circle
+   *
+   * As soon as ANY disturbance is detected, triggers instant path re-planning!
+   */
+  evaluateBlueDomainDisturbance(ship) {
+    if (!ship || !ship.activePath || ship.state === 'IDLE' || ship.state === 'ARRIVED') {
+      return { disturbanceDetected: false, reason: '', type: null };
+    }
+
+    const grid = this.grid;
+    const params = ship.getDomainEllipseParameters ? ship.getDomainEllipseParameters(grid.cellSizeMeters) : null;
+    if (!params) {
+      return { disturbanceDetected: false, reason: '', type: null };
+    }
+
+    const cellSize = grid.cellSizeMeters;
+
+    // Bounding box of the blue domain envelope
+    const maxDimMeters = Math.max(params.semiMajorM, params.semiMinorM) + 8.0;
+    const maxCells = Math.ceil(maxDimMeters / cellSize) + 1;
+    const cgx = Math.round(params.centerX);
+    const cgy = Math.round(params.centerY);
+
+    const minX = Math.max(0, cgx - maxCells);
+    const maxX = Math.min(grid.cols - 1, cgx + maxCells);
+    const minY = Math.max(0, cgy - maxCells);
+    const maxY = Math.min(grid.rows - 1, cgy + maxCells);
+
+    // 1. Check all bathymetric grid cells within the bounding area of the blue domain
+    for (let gy = minY; gy <= maxY; gy++) {
+      for (let gx = minX; gx <= maxX; gx++) {
+        const isLand = grid.cells[gy][gx] === grid.TYPE_LAND;
+        const isShoal = grid.depths[gy][gx] < ship.draft;
+        if (!isLand && !isShoal) continue;
+
+        // Sample center + 4 corners of the 50m x 50m cell
+        const testPoints = [
+          { x: gx, y: gy },
+          { x: gx - 0.45, y: gy - 0.45 },
+          { x: gx + 0.45, y: gy - 0.45 },
+          { x: gx - 0.45, y: gy + 0.45 },
+          { x: gx + 0.45, y: gy + 0.45 }
+        ];
+
+        for (let p = 0; p < testPoints.length; p++) {
+          if (ship.isPointInsideBlueDomain(testPoints[p].x, testPoints[p].y, 2.0, cellSize)) {
+            const desc = isLand ? 'Land Obstacle' : 'Shallow Reef';
+            return {
+              disturbanceDetected: true,
+              reason: `Blue Circle (SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³) detected ${desc} at (${gx}, ${gy})`,
+              type: 'static',
+              location: { x: gx, y: gy }
+            };
+          }
+        }
+      }
+    }
+
+    // 2. Check AIS Marine Vessels (commercial ships & mini-ships)
+    if (this.aisSystem && this.aisSystem.vessels) {
+      for (let i = 0; i < this.aisSystem.vessels.length; i++) {
+        const v = this.aisSystem.vessels[i];
+        const vMargin = Math.min(22.0, (v.domainRadiusMeters || 35.0) * 0.35);
+        if (ship.isPointInsideBlueDomain(v.x, v.y, vMargin, cellSize)) {
+          return {
+            disturbanceDetected: true,
+            reason: `Blue Circle (SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³) detected AIS Vessel: ${v.name} (${v.sog.toFixed(1)}kn @ ${v.cog.toFixed(0)}°)`,
+            type: 'ais_vessel',
+            vessel: v
+          };
+        }
+      }
+    }
+
+    // 3. Check Dynamic Drift Hazards (icebergs, debris)
+    if (this.obstacles) {
+      for (let i = 0; i < this.obstacles.length; i++) {
+        const obs = this.obstacles[i];
+        const obsMargin = Math.min(20.0, (obs.radiusMeters || 30.0) * 0.5);
+        if (ship.isPointInsideBlueDomain(obs.x, obs.y, obsMargin, cellSize)) {
+          return {
+            disturbanceDetected: true,
+            reason: `Blue Circle (SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³) detected Dynamic ${obs.type.toUpperCase()} #${obs.id}`,
+            type: 'hazard',
+            obstacle: obs
+          };
+        }
+      }
+    }
+
+    return { disturbanceDetected: false, reason: '', type: null };
+  }
+
+  /**
    * Evaluates collision threats against static obstacles (newly drawn land/shoals),
    * AIS vessels, and dynamic debris, triggering instant dynamic rerouting or hold-and-wait if necessary.
    */
@@ -296,19 +394,46 @@ class DynamicObstacleManager {
     }
 
     const horizonSec = ship.lookaheadHorizonSeconds;
+
+    // 1. Direct Blue Circle disturbance test:
+    const blueDisturbance = this.evaluateBlueDomainDisturbance(ship);
+
+    // 2. Path lookahead & static obstacle test:
     const staticThreat = this.evaluateStaticObstruction(ship);
+
+    // 3. AIS traffic collision risk test:
     const trafficRisk = this.aisSystem
       ? this.aisSystem.evaluateTrafficRisk(ship, horizonSec)
       : { conflictDetected: false, emergencyImminent: false };
+
+    // 4. Dynamic debris test:
     const debrisThreat = this.evaluateDebrisRisk(ship, horizonSec);
 
-    const anyConflict = staticThreat.conflictDetected || trafficRisk.conflictDetected || debrisThreat.conflictDetected;
-    const emergencyImminent = staticThreat.emergencyImminent || trafficRisk.emergencyImminent || debrisThreat.emergencyImminent;
+    const anyConflict = blueDisturbance.disturbanceDetected ||
+                        staticThreat.conflictDetected ||
+                        trafficRisk.conflictDetected ||
+                        debrisThreat.conflictDetected;
+
+    const emergencyImminent = blueDisturbance.disturbanceDetected ||
+                             staticThreat.emergencyImminent ||
+                             trafficRisk.emergencyImminent ||
+                             debrisThreat.emergencyImminent;
+
+    // Update ship's active domain disturbance flag for visual renderer
+    if (blueDisturbance.disturbanceDetected) {
+      ship.domainDisturbance = true;
+      ship.domainDisturbanceReason = blueDisturbance.reason;
+      ship.domainDisturbancePulseTimer = 2.5;
+    } else if (ship.domainDisturbancePulseTimer <= 0) {
+      ship.domainDisturbance = false;
+      ship.domainDisturbanceReason = '';
+    }
 
     // If vessel was holding & waiting and path ahead is now completely clear, resume navigation!
     if (ship.state === 'HOLD_WAIT' && !anyConflict && !emergencyImminent) {
       ship.state = 'CRUISING';
       ship.targetSpeed = ship.maxSpeedMs;
+      ship.domainDisturbance = false;
       if (logCallback) {
         logCallback('Fairway clear of all obstacles & traffic. Resuming voyage along optimal path.', 'success');
       }
@@ -316,12 +441,14 @@ class DynamicObstacleManager {
     }
 
     // IMMEDIATE EMERGENCY PROXIMITY SHIELD:
-    // If an obstacle or vessel is within stopping distance, stop/slow down immediately to prevent collision!
+    // If an obstacle or vessel is within stopping distance or touches the blue circle, stop/slow down immediately to prevent collision!
     if (emergencyImminent) {
       if (ship.state !== 'HOLD_WAIT' && ship.state !== 'EMERGENCY_STOP') {
         ship.holdAndWait();
         if (logCallback) {
-          const detail = staticThreat.conflictDetected ? staticThreat.reason : 'Traffic/hazard proximity';
+          const detail = blueDisturbance.disturbanceDetected
+            ? blueDisturbance.reason
+            : (staticThreat.conflictDetected ? staticThreat.reason : 'Traffic/hazard proximity');
           logCallback(`EMERGENCY PROXIMITY SHIELD: ${detail}. Decelerating / holding position while computing avoidance path!`, 'warning');
         }
       }
@@ -331,14 +458,17 @@ class DynamicObstacleManager {
       return;
     }
 
-    // Bypass simulation cooldown if static threat is detected or forceCheck is requested!
-    if (!forceCheck && !staticThreat.conflictDetected && (this.simTime - this.lastReplanSimTime < this.replanCooldownSimSec)) {
+    // Bypass simulation cooldown if disturbance or static threat is detected or forceCheck is requested!
+    if (!forceCheck && !blueDisturbance.disturbanceDetected && !staticThreat.conflictDetected && (this.simTime - this.lastReplanSimTime < this.replanCooldownSimSec)) {
       return;
     }
 
     let threatName = '';
     let threatDetails = '';
-    if (staticThreat.conflictDetected) {
+    if (blueDisturbance.disturbanceDetected) {
+      threatName = 'Blue Domain Perimeter Disturbance';
+      threatDetails = blueDisturbance.reason;
+    } else if (staticThreat.conflictDetected) {
       threatName = 'Newly Placed Land/Shoal Obstacle';
       threatDetails = staticThreat.reason;
     } else if (trafficRisk.conflictDetected && trafficRisk.criticalVessel) {

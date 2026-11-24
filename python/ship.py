@@ -50,6 +50,10 @@ class CargoASV:
         self.has_replanned = False
         self.total_replans = 0
 
+        # Blue Circle / Ship Domain disturbance detection state
+        self.domain_disturbance = False
+        self.domain_disturbance_reason = ""
+
     @property
     def ship_domain_volume(self) -> float:
         """Computes volumetric Ship Domain: SS = L * B * D in m^3"""
@@ -64,6 +68,48 @@ class CargoASV:
         speed_ratio = (self.speed / self.max_speed_ms) if self.speed > 0.1 else 0.8
         dynamic_buffer = speed_ratio * 8.0
         return half_beam + base_margin + displacement_buffer + dynamic_buffer
+
+    def get_domain_ellipse_parameters(self, cell_size_meters: float = 50.0) -> Dict[str, float]:
+        half_len_meters = self.length / 2.0
+        half_bm_meters = self.beam / 2.0
+        domain_radius = self.domain_radius_meters
+
+        semi_major_m = half_len_meters * 1.5 + domain_radius * 0.8
+        semi_minor_m = half_bm_meters + domain_radius
+        center_offset_m = half_len_meters * 0.4
+
+        return {
+            "semi_major_m": semi_major_m,
+            "semi_minor_m": semi_minor_m,
+            "center_offset_m": center_offset_m,
+            "heading": self.heading,
+            "center_x": self.x + (math.cos(self.heading) * center_offset_m) / cell_size_meters,
+            "center_y": self.y + (math.sin(self.heading) * center_offset_m) / cell_size_meters,
+        }
+
+    def is_point_inside_blue_domain(self,
+                                   wx: float,
+                                   wy: float,
+                                   extra_margin_meters: float = 0.0,
+                                   cell_size_meters: float = 50.0) -> bool:
+        params = self.get_domain_ellipse_parameters(cell_size_meters)
+        dx_m = (wx - self.x) * cell_size_meters
+        dy_m = (wy - self.y) * cell_size_meters
+
+        cos_h = math.cos(self.heading)
+        sin_h = math.sin(self.heading)
+
+        lx = dx_m * cos_h + dy_m * sin_h
+        ly = -dx_m * sin_h + dy_m * cos_h
+
+        elx = lx - params["center_offset_m"]
+        ely = ly
+
+        a = params["semi_major_m"] + extra_margin_meters
+        b = params["semi_minor_m"] + extra_margin_meters
+
+        norm_dist_sq = (elx * elx) / (a * a) + (ely * ely) / (b * b)
+        return norm_dist_sq <= 1.0
 
     @property
     def max_speed_ms(self) -> float:

@@ -611,6 +611,7 @@ window.addEventListener('DOMContentLoaded', () => {
   function applyPaintBrush(gx, gy, cellType, depthVal) {
     const offset = brushRadius - 1;
     let modified = false;
+    let touchedBlueCircle = false;
     const curShipGx = Math.round(ship.x);
     const curShipGy = Math.round(ship.y);
 
@@ -626,12 +627,20 @@ window.addEventListener('DOMContentLoaded', () => {
         if (grid.cells[ny][nx] !== cellType) {
           grid.setCell(nx, ny, cellType, depthVal);
           modified = true;
+          if (ship.isPointInsideBlueDomain && ship.isPointInsideBlueDomain(nx, ny, 2.0, grid.cellSizeMeters)) {
+            touchedBlueCircle = true;
+          }
         }
       }
     }
     if (modified) {
       grid.computeDistanceField(ship.draft);
       mapDirtySinceSolve = true;
+      if (touchedBlueCircle) {
+        ship.domainDisturbance = true;
+        ship.domainDisturbanceReason = `Manual brush disturbance near Blue Domain at (${gx}, ${gy})`;
+        ship.domainDisturbancePulseTimer = 2.5;
+      }
       if (isSimRunning && ship.activePath) {
         obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
       }
@@ -710,6 +719,11 @@ window.addEventListener('DOMContentLoaded', () => {
       mapDirtySinceSolve = true;
       logEvent(`Placed Cargo Ship: ${v.name} at (${startPt.x}, ${startPt.y}) | ${cfgSpeed.toFixed(1)}kn @ ${cogDeg.toFixed(0)}°`, 'info');
       updateAISTrafficTable();
+      if (ship.isPointInsideBlueDomain && ship.isPointInsideBlueDomain(startPt.x, startPt.y, 10.0, grid.cellSizeMeters)) {
+        ship.domainDisturbance = true;
+        ship.domainDisturbanceReason = `Vessel ${v.name} placed inside Blue Domain`;
+        ship.domainDisturbancePulseTimer = 2.5;
+      }
       if (isSimRunning && ship.activePath) {
         obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
       }
@@ -724,6 +738,11 @@ window.addEventListener('DOMContentLoaded', () => {
       mapDirtySinceSolve = true;
       logEvent(`Placed Mini Ship: ${v.name} at (${startPt.x}, ${startPt.y}) | ${v.sog.toFixed(1)}kn @ ${cogDeg.toFixed(0)}°`, 'info');
       updateAISTrafficTable();
+      if (ship.isPointInsideBlueDomain && ship.isPointInsideBlueDomain(startPt.x, startPt.y, 8.0, grid.cellSizeMeters)) {
+        ship.domainDisturbance = true;
+        ship.domainDisturbanceReason = `Mini-ship ${v.name} placed inside Blue Domain`;
+        ship.domainDisturbancePulseTimer = 2.5;
+      }
       if (isSimRunning && ship.activePath) {
         obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
       }
@@ -736,6 +755,11 @@ window.addEventListener('DOMContentLoaded', () => {
       mapDirtySinceSolve = true;
       logEvent(`Placed Dynamic ${obs.type.toUpperCase()} Hazard #${obs.id} at (${startPt.x}, ${startPt.y}).`, 'info');
       updateAISTrafficTable();
+      if (ship.isPointInsideBlueDomain && ship.isPointInsideBlueDomain(startPt.x, startPt.y, 10.0, grid.cellSizeMeters)) {
+        ship.domainDisturbance = true;
+        ship.domainDisturbanceReason = `Hazard #${obs.id} placed inside Blue Domain`;
+        ship.domainDisturbancePulseTimer = 2.5;
+      }
       if (isSimRunning && ship.activePath) {
         obstacleManager.checkAndReroute(ship, threeStagePlanner, logEvent, true);
       }

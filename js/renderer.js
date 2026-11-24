@@ -512,14 +512,24 @@ class MaritimeRenderer {
     ctx.rotate(ship.heading);
 
     // -------------------------------------------------------------
-    // SHIP DOMAIN (SS = L * B * D) Envelope
+    // SHIP DOMAIN (SS = L * B * D) Envelope (Blue Protective Circle)
     // -------------------------------------------------------------
     if (this.showShipDomain) {
       ctx.save();
-      ctx.fillStyle = 'rgba(135, 196, 255, 0.35)'; // #87C4FF domain zone
-      ctx.strokeStyle = '#39A7FF';                 // #39A7FF domain boundary
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 4]);
+      if (ship.domainDisturbance) {
+        // Active dynamic disturbance detected inside the blue circle!
+        ctx.fillStyle = 'rgba(255, 107, 107, 0.42)'; // Warning coral/amber pulse
+        ctx.strokeStyle = '#E02424';                 // Bright alert perimeter
+        ctx.lineWidth = 2.4;
+        ctx.setLineDash([5, 3]);
+        ctx.shadowColor = 'rgba(224, 36, 36, 0.65)';
+        ctx.shadowBlur = 10;
+      } else {
+        ctx.fillStyle = 'rgba(135, 196, 255, 0.35)'; // #87C4FF domain zone
+        ctx.strokeStyle = '#39A7FF';                 // #39A7FF domain boundary
+        ctx.lineWidth = 1.6;
+        ctx.setLineDash([4, 4]);
+      }
 
       ctx.beginPath();
       ctx.ellipse(
@@ -532,10 +542,13 @@ class MaritimeRenderer {
       ctx.stroke();
 
       // Ship Domain Tag
-      ctx.fillStyle = '#0A2540';
+      ctx.fillStyle = ship.domainDisturbance ? '#990000' : '#0A2540';
       ctx.font = 'bold 8px "Inter", sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³`, 0, -halfBmPx - domainRadiusPx - 3);
+      const domainLabel = ship.domainDisturbance
+        ? `⚠️ DISTURBANCE DETECTED (SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³)`
+        : `SS: ${(ship.shipDomainVolume / 1000).toFixed(0)}k m³`;
+      ctx.fillText(domainLabel, 0, -halfBmPx - domainRadiusPx - 4);
       ctx.restore();
     }
 

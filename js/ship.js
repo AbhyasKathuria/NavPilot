@@ -47,6 +47,11 @@ class CargoShip {
     this.totalReplans = 0;
     this.pathIndex = 0;
 
+    // Blue Circle / Ship Domain disturbance detection state
+    this.domainDisturbance = false;
+    this.domainDisturbanceReason = '';
+    this.domainDisturbancePulseTimer = 0;
+
     // Trail history for wake / swept visualization
     this.trail = [];
     this.maxTrailLength = 120;
@@ -72,6 +77,61 @@ class CargoShip {
     const dynamicBuffer = speedRatio * 8.0;
 
     return halfBeam + baseMargin + displacementBuffer + dynamicBuffer;
+  }
+
+  /**
+   * Returns exact 2D Ship Domain ellipse parameters (in meters)
+   * matching the visible blue envelope rendered on screen.
+   */
+  getDomainEllipseParameters(cellSizeMeters = 50.0) {
+    const halfLenMeters = this.length / 2.0;
+    const halfBmMeters = this.beam / 2.0;
+    const domainRadius = this.domainRadiusMeters;
+
+    const semiMajorM = halfLenMeters * 1.5 + domainRadius * 0.8; // longitudinal radius
+    const semiMinorM = halfBmMeters + domainRadius;              // transverse radius
+    const centerOffsetM = halfLenMeters * 0.4;                   // shifted forward towards bow
+
+    return {
+      semiMajorM,
+      semiMinorM,
+      centerOffsetM,
+      heading: this.heading,
+      centerX: this.x + (Math.cos(this.heading) * centerOffsetM) / cellSizeMeters,
+      centerY: this.y + (Math.sin(this.heading) * centerOffsetM) / cellSizeMeters
+    };
+  }
+
+  /**
+   * Tests whether a continuous world coordinate (wx, wy in grid cells)
+   * falls inside or touches the blue Ship Domain envelope.
+   * @param {number} wx - X coordinate in grid cells
+   * @param {number} wy - Y coordinate in grid cells
+   * @param {number} extraMarginMeters - extra safety boundary margin
+   * @param {number} cellSizeMeters - grid cell size
+   * @returns {boolean}
+   */
+  isPointInsideBlueDomain(wx, wy, extraMarginMeters = 0.0, cellSizeMeters = 50.0) {
+    const params = this.getDomainEllipseParameters(cellSizeMeters);
+    const dxMeters = (wx - this.x) * cellSizeMeters;
+    const dyMeters = (wy - this.y) * cellSizeMeters;
+
+    const cosH = Math.cos(this.heading);
+    const sinH = Math.sin(this.heading);
+
+    // Transform world delta into vessel-aligned local coordinates
+    const lx = dxMeters * cosH + dyMeters * sinH;
+    const ly = -dxMeters * sinH + dyMeters * cosH;
+
+    // Relocate to ellipse center
+    const elx = lx - params.centerOffsetM;
+    const ely = ly;
+
+    const a = params.semiMajorM + extraMarginMeters;
+    const b = params.semiMinorM + extraMarginMeters;
+
+    const normDistSq = (elx * elx) / (a * a) + (ely * ely) / (b * b);
+    return normDistSq <= 1.0;
   }
 
   updateParameters(params) {
@@ -143,6 +203,9 @@ class CargoShip {
     this.hasReplanned = false;
     this.totalReplans = 0;
     this.totalEnergyConsumed = 0.0;
+    this.domainDisturbance = false;
+    this.domainDisturbanceReason = '';
+    this.domainDisturbancePulseTimer = 0;
     this.trail = [];
   }
 
@@ -221,6 +284,13 @@ class CargoShip {
 
     const accelRate = 0.5 * Math.pow(50000.0 / this.displacement, 0.4);
     const decelRate = 0.8 * Math.pow(50000.0 / this.displacement, 0.4);
+
+    if (this.domainDisturbancePulseTimer > 0) {
+      this.domainDisturbancePulseTimer -= dt;
+      if (this.domainDisturbancePulseTimer <= 0) {
+        this.domainDisturbance = false;
+      }
+    }
 
     if (this.speed < this.targetSpeed) {
       this.speed = Math.min(this.targetSpeed, this.speed + accelRate * dt);
